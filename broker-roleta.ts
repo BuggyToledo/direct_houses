@@ -118,13 +118,44 @@ export function saveRoletaConfig(config: Partial<RoletaConfig>): RoletaConfig {
 
 export function cleanPhoneNumber(phone: string): string {
   if (!phone) return '';
-  const digits = phone.replace(/\D/g, '');
+  let digits = phone.replace(/\D/g, '');
   if (!digits) return '';
+
   // If Brazilian number without country code (10 or 11 digits), prepend 55
   if (digits.length === 10 || digits.length === 11) {
-    return `55${digits}`;
+    digits = `55${digits}`;
   }
+
+  // If Brazilian number with 12 digits (55 + DDD + 8 digits, missing the 9th digit), insert the 9
+  if (digits.length === 12 && digits.startsWith('55')) {
+    const ddiAndDdd = digits.slice(0, 4); // '5521'
+    const rest = digits.slice(4); // '87654321'
+    digits = `${ddiAndDdd}9${rest}`;
+  }
+
   return digits;
+}
+
+export function formatPhoneForDisplay(phone: string): string {
+  const clean = cleanPhoneNumber(phone);
+  if (!clean) return phone || '';
+
+  // Brazilian format: 5521987654321
+  if (clean.length === 13 && clean.startsWith('55')) {
+    const ddd = clean.slice(2, 4);
+    const part1 = clean.slice(4, 9);
+    const part2 = clean.slice(9);
+    return `+55 (${ddd}) ${part1}-${part2}`;
+  }
+
+  if (clean.length === 11) {
+    const ddd = clean.slice(0, 2);
+    const part1 = clean.slice(2, 7);
+    const part2 = clean.slice(7);
+    return `(${ddd}) ${part1}-${part2}`;
+  }
+
+  return `+${clean}`;
 }
 
 export function addBroker(brokerData: Omit<Broker, 'id' | 'createdAt' | 'leadsReceived'>): Broker {
@@ -216,19 +247,37 @@ export function formatBrokerLeadMessage(
     produtoImovel?: string;
     observacoes?: string;
     origem?: string;
+    isTimeoutRecovery?: boolean;
+    initialMessage?: string;
   },
   companyName: string = 'Direct Houses',
   clientPhone?: string
 ): string {
   const phone = clientPhone || lead.telefone || '';
   const cleanPhone = cleanPhoneNumber(phone);
+  const displayPhone = formatPhoneForDisplay(phone);
   const waLink = cleanPhone ? `https://wa.me/${cleanPhone}` : '';
+
+  if (lead.isTimeoutRecovery) {
+    return (
+      `⚠️ *LEAD CAPTURADO POR INATIVIDADE (5 MIN SEM RESPOSTA)*\n\n` +
+      `Olá, corretor! Um cliente iniciou contato no WhatsApp da *${companyName}*, mas parou de responder às perguntas do assistente virtual. Para não perdermos o lead, ele foi direcionado imediatamente para você.\n\n` +
+      `👤 *Nome:* ${lead.nome || 'Cliente WhatsApp'}\n` +
+      `📱 *Telefone:* ${displayPhone || 'Capturado na sessão'}\n` +
+      (lead.initialMessage ? `💬 *Primeira mensagem do cliente:* "${lead.initialMessage}"\n` : '') +
+      `⏱️ *Horário:* ${new Date().toLocaleString('pt-BR')}\n` +
+      `📌 *Ação sugerida:* Entre em contato diretamente pelo WhatsApp abaixo para dar atendimento humanizado.\n\n` +
+      (waLink
+        ? `💬 *CLIQUE AQUI PARA INICIAR A CONVERSA COM O CLIENTE:*\n${waLink}`
+        : `_Telefone não disponível para link direto._`)
+    );
+  }
 
   return (
     `🏡 *NOVO LEAD QUALIFICADO - ${companyName.toUpperCase()}*\n\n` +
     `Olá, corretor! Um novo cliente acabou de ser qualificado pelo assistente virtual e direcionado para você.\n\n` +
     `👤 *Nome:* ${lead.nome || 'Não informado'}\n` +
-    `📱 *Telefone:* ${lead.telefone || phone || 'Não informado'}\n` +
+    `📱 *Telefone:* ${displayPhone || lead.telefone || phone || 'Não informado'}\n` +
     `🎯 *Tipo de Atendimento:* ${(lead.tipoAtendimento || 'Interesse Imobiliário').toUpperCase()}\n` +
     `🏢 *Produto / Imóvel:* ${lead.produtoImovel || 'A combinar'}\n` +
     `📝 *Observações:* ${lead.observacoes || 'Nenhuma'}\n` +
