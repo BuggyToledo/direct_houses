@@ -133,7 +133,6 @@ class WhatsAppService {
       this.sock = makeWASocket({
         version,
         logger,
-        printQRInTerminal: true,
         browser: ['Direct Houses', 'Chrome', '1.0.0'],
         auth: {
           creds: authState.creds,
@@ -164,7 +163,14 @@ class WhatsAppService {
             });
             this.state = 'qr_ready';
             this.isConnecting = false;
-            console.log('⚡ [WhatsApp] Novo QR Code pronto para leitura no navegador e no terminal.');
+            
+            console.log('\n========================================');
+            console.log('⚡ [WhatsApp] QR Code pronto para leitura!');
+            console.log('Abra no navegador em http://localhost:3000 ou escaneie abaixo:');
+            console.log('========================================\n');
+            const terminalQr = await QRCode.toString(qr, { type: 'terminal', small: true }).catch(() => '');
+            if (terminalQr) console.log(terminalQr);
+            console.log('\n========================================\n');
           } catch (qrErr) {
             console.error('Erro ao gerar imagem de QR Code:', qrErr);
           }
