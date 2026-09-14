@@ -1,16 +1,34 @@
-import makeWASocket, {
-  DisconnectReason,
-  useMultiFileAuthState,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
-  WAMessage,
-} from '@whiskeysockets/baileys';
+import * as BaileysModule from '@whiskeysockets/baileys';
+import type { WAMessage } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import QRCode from 'qrcode';
 import path from 'path';
 import fs from 'fs';
 import { cleanPhoneNumber } from './broker-roleta';
+
+// Robust Baileys exports resolution across ESM, CJS (esbuild bundle) and tsx
+const makeWASocket: any =
+  (BaileysModule as any).default?.default ||
+  (BaileysModule as any).makeWASocket ||
+  (BaileysModule as any).default ||
+  BaileysModule;
+
+const DisconnectReason: any =
+  (BaileysModule as any).DisconnectReason ||
+  (BaileysModule as any).default?.DisconnectReason;
+
+const useMultiFileAuthState: any =
+  (BaileysModule as any).useMultiFileAuthState ||
+  (BaileysModule as any).default?.useMultiFileAuthState;
+
+const fetchLatestBaileysVersion: any =
+  (BaileysModule as any).fetchLatestBaileysVersion ||
+  (BaileysModule as any).default?.fetchLatestBaileysVersion;
+
+const makeCacheableSignalKeyStore: any =
+  (BaileysModule as any).makeCacheableSignalKeyStore ||
+  (BaileysModule as any).default?.makeCacheableSignalKeyStore;
 
 export type WhatsAppState = 'disconnected' | 'connecting' | 'qr_ready' | 'connected';
 

@@ -295,7 +295,7 @@ function getFallbackReply(
               .map(
                 (l, i) =>
                   `🏢 *${i + 1}. ${l.nome}* (${l.bairro})\n• Tipologias: ${l.tipologias}\n• Preço: ${l.precoAPartirDe || 'Sob consulta'}${
-                    l.bookPdfUrl ? `\n• Book: ${l.bookPdfUrl}` : ''
+                    l.linkBookPdf ? `\n• Book: ${l.linkBookPdf}` : ''
                   }`
               )
               .join('\n\n') +
