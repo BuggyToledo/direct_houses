@@ -164,8 +164,7 @@ export function updateBroker(id: string, updates: Partial<Broker>): Broker | nul
 
 export function deleteBroker(id: string): boolean {
   const brokers = getBrokers();
-  const filtered = brokers.filter((b) => b.id !== id);
-  if (filtered.length === brokers.length) return false;
+  const filtered = brokers.filter((b) => String(b.id).trim() !== String(id).trim());
   saveBrokers(filtered);
   return true;
 }

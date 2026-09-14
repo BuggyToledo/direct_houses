@@ -843,11 +843,8 @@ app.put('/api/brokers/:id', (req, res) => {
 app.delete('/api/brokers/:id', (req, res) => {
   try {
     const { id } = req.params;
-    const deleted = deleteBroker(id);
-    if (!deleted) {
-      return res.status(404).json({ error: 'Corretor não encontrado.' });
-    }
-    res.json({ success: true, message: 'Corretor removido com sucesso.' });
+    deleteBroker(id);
+    res.json({ success: true, brokers: getBrokers(), message: 'Corretor removido com sucesso.' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

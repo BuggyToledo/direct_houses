@@ -46,6 +46,7 @@ export function BrokersManagementModal({
   const [newPhone, setNewPhone] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [isAdding, setIsAdding] = useState(false);
+  const [deletingBrokerId, setDeletingBrokerId] = useState<string | null>(null);
 
   // Load brokers & config
   const fetchBrokersData = async () => {
@@ -68,6 +69,7 @@ export function BrokersManagementModal({
     if (isOpen) {
       fetchBrokersData();
       setActionMessage(null);
+      setDeletingBrokerId(null);
     }
   }, [isOpen]);
 
@@ -117,15 +119,25 @@ export function BrokersManagementModal({
   };
 
   const handleDeleteBroker = async (id: string) => {
-    if (!confirm('Deseja realmente remover este corretor da fila?')) return;
+    setDeletingBrokerId(null);
+    // Optimistic UI update
+    setBrokers((prev) => prev.filter((b) => b.id !== id));
+
     try {
-      const res = await fetch(`/api/brokers/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/brokers/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.brokers)) {
+          setBrokers(data.brokers);
+        }
+        setActionMessage({ success: true, text: 'Corretor removido com sucesso da fila!' });
+      } else {
         await fetchBrokersData();
-        setActionMessage({ success: true, text: 'Corretor removido.' });
       }
     } catch (err) {
       console.error('Erro ao deletar corretor:', err);
+      await fetchBrokersData();
+      setActionMessage({ success: false, text: 'Erro ao remover corretor.' });
     }
   };
 
@@ -455,13 +467,34 @@ export function BrokersManagementModal({
                         <Send className="w-4 h-4" />
                       </button>
 
-                      <button
-                        title="Remover corretor"
-                        onClick={() => handleDeleteBroker(b.id)}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {deletingBrokerId === b.id ? (
+                        <div className="flex items-center gap-1.5 bg-rose-50 border border-rose-200 rounded-lg p-1 animate-in fade-in duration-150">
+                          <span className="text-[10px] text-rose-700 font-bold px-1">Excluir?</span>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteBroker(b.id)}
+                            className="px-2 py-0.5 bg-rose-600 hover:bg-rose-700 text-white rounded-md text-[10px] font-bold transition-colors shadow-2xs"
+                          >
+                            Sim
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeletingBrokerId(null)}
+                            className="px-1.5 py-0.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-md text-[10px] transition-colors"
+                          >
+                            Não
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          title="Remover corretor"
+                          onClick={() => setDeletingBrokerId(b.id)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))
