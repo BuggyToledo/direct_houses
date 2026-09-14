@@ -19,7 +19,7 @@ interface WhatsAppConnectModalProps {
   onClose: () => void;
   status: WhatsAppStatus;
   onRefreshStatus: () => void;
-  onConnect: () => void;
+  onConnect: (force?: boolean) => void;
   onDisconnect: () => void;
 }
 
@@ -176,20 +176,20 @@ export function WhatsAppConnectModal({
 
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-3 items-center justify-between pt-2">
-            {!isConnected && !isQrReady && !isConnecting && (
+            {!isConnected && !isQrReady && (
               <button
-                onClick={onConnect}
-                className="w-full sm:w-auto px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-xl transition-all shadow-sm hover:shadow flex items-center justify-center gap-2"
+                onClick={() => onConnect(true)}
+                className="w-full sm:w-auto px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-xl transition-all shadow-sm hover:shadow flex items-center justify-center gap-2 cursor-pointer"
               >
                 <QrCode className="w-4 h-4" />
-                Gerar QR Code de Conexão
+                {isConnecting ? 'Reiniciar e Gerar QR Code' : 'Gerar QR Code de Conexão'}
               </button>
             )}
 
             {isQrReady && (
               <button
-                onClick={onConnect}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-xs rounded-lg transition-colors flex items-center gap-1.5"
+                onClick={() => onConnect(true)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-xs rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 Atualizar QR Code

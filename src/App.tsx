@@ -198,9 +198,13 @@ export default function App() {
     }
   }, []);
 
-  const handleConnectWhatsApp = async () => {
+  const handleConnectWhatsApp = async (force: boolean = false) => {
     try {
-      const res = await fetch('/api/whatsapp/connect', { method: 'POST' });
+      const res = await fetch('/api/whatsapp/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+      });
       if (res.ok) {
         const data = await res.json();
         setWhatsAppStatus(data);

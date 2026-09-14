@@ -75,12 +75,20 @@ class WhatsAppService {
     this.messageHandlers.push(handler);
   }
 
-  public async connect(): Promise<WhatsAppStatus> {
-    if (this.sock && this.state === 'connected') {
+  public async connect(force: boolean = false): Promise<WhatsAppStatus> {
+    if (!force && this.sock && this.state === 'connected') {
       return this.getStatus();
     }
 
-    if (this.isConnecting) {
+    if (force && this.sock) {
+      try {
+        this.sock.end(undefined);
+      } catch (e) {}
+      this.sock = null;
+      this.isConnecting = false;
+    }
+
+    if (!force && this.isConnecting) {
       return this.getStatus();
     }
 
@@ -88,9 +96,36 @@ class WhatsAppService {
     this.state = 'connecting';
     this.errorMessage = null;
 
+    // Safety timeout to prevent isConnecting from hanging
+    const connectionTimeout = setTimeout(() => {
+      if (this.state === 'connecting') {
+        this.isConnecting = false;
+        if (!this.qrCodeDataUrl) {
+          this.state = 'disconnected';
+          this.errorMessage = 'Tempo limite ao gerar QR Code. Clique em Atualizar QR Code.';
+        }
+      }
+    }, 25000);
+
     try {
       this.ensureAuthDir();
-      const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+      
+      let authState: any;
+      let saveCreds: any;
+
+      try {
+        const authResult = await useMultiFileAuthState(AUTH_DIR);
+        authState = authResult.state;
+        saveCreds = authResult.saveCreds;
+      } catch (authErr) {
+        console.warn('⚠️ [WhatsApp] Falha ao carregar credenciais antigas. Limpando pasta de auth para nova sessão...', authErr);
+        this.clearAuthDir();
+        this.ensureAuthDir();
+        const freshAuth = await useMultiFileAuthState(AUTH_DIR);
+        authState = freshAuth.state;
+        saveCreds = freshAuth.saveCreds;
+      }
+
       const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1015901307] as any }));
 
       const logger = pino({ level: 'silent' });
@@ -98,7 +133,8 @@ class WhatsAppService {
       this.sock = makeWASocket({
         version,
         logger,
-        printQRInTerminal: false,
+        printQRInTerminal: true,
+        browser: ['Direct Houses', 'Chrome', '1.0.0'],
         auth: {
           creds: authState.creds,
           keys: makeCacheableSignalKeyStore(authState.keys, logger),
@@ -106,6 +142,8 @@ class WhatsAppService {
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
         markOnlineOnConnect: true,
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 30000,
       });
 
       this.sock.ev.on('creds.update', saveCreds);
@@ -114,6 +152,7 @@ class WhatsAppService {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
+          clearTimeout(connectionTimeout);
           try {
             this.qrCodeDataUrl = await QRCode.toDataURL(qr, {
               margin: 2,
@@ -124,13 +163,15 @@ class WhatsAppService {
               },
             });
             this.state = 'qr_ready';
-            console.log('⚡ [WhatsApp] Novo QR Code pronto para leitura.');
+            this.isConnecting = false;
+            console.log('⚡ [WhatsApp] Novo QR Code pronto para leitura no navegador e no terminal.');
           } catch (qrErr) {
             console.error('Erro ao gerar imagem de QR Code:', qrErr);
           }
         }
 
         if (connection === 'open') {
+          clearTimeout(connectionTimeout);
           this.state = 'connected';
           this.qrCodeDataUrl = null;
           this.isConnecting = false;
@@ -143,6 +184,7 @@ class WhatsAppService {
           this.connectedName = user?.name || 'Direct Houses WhatsApp';
           console.log(`✅ [WhatsApp] Conectado com sucesso! Número: +${this.connectedPhone}`);
         } else if (connection === 'close') {
+          clearTimeout(connectionTimeout);
           this.isConnecting = false;
           const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
           const shouldReconnect = statusCode !== DisconnectReason.loggedOut;

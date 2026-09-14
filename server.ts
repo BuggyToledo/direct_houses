@@ -900,7 +900,8 @@ app.get('/api/whatsapp/status', (req, res) => {
 // Start WhatsApp connection (initializes socket & generates QR code)
 app.post('/api/whatsapp/connect', async (req, res) => {
   try {
-    const status = await whatsAppService.connect();
+    const force = Boolean(req.body?.force || req.query?.force);
+    const status = await whatsAppService.connect(force);
     res.json(status);
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Erro ao conectar WhatsApp' });
@@ -1239,6 +1240,16 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
+    // Auto-connect WhatsApp if saved session exists
+    try {
+      const authCredsPath = path.join(process.cwd(), '.whatsapp_auth', 'creds.json');
+      if (fs.existsSync(authCredsPath)) {
+        console.log('📱 [WhatsApp] Sessão salva encontrada. Conectando automaticamente...');
+        whatsAppService.connect();
+      }
+    } catch (e) {
+      console.warn('Erro ao verificar sessão salva do WhatsApp:', e);
+    }
   });
 }
 
