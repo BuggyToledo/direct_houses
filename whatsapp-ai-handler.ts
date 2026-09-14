@@ -12,6 +12,10 @@ import {
   getBrokers,
 } from './broker-roleta';
 import { recordLead } from './leads-service';
+import {
+  formatLancamentosForPrompt,
+  getActiveLancamentos,
+} from './lancamentos-service';
 
 export interface WhatsAppChatSession {
   jid: string;
@@ -97,6 +101,7 @@ function isGreetingOnly(text: string): boolean {
 function buildSystemPrompt(companyName: string = 'Direct Houses', customerPhone: string, initialMessage: string = '') {
   const hasValidPhone = isValidPhoneNumber(customerPhone);
   const displayPhone = hasValidPhone ? formatPhoneForDisplay(customerPhone) : '';
+  const lancamentosText = formatLancamentosForPrompt();
 
   return `Você é o assistente comercial oficial da imobiliária ${companyName}.
 Você está conversando DIRETAMENTE no WhatsApp com um cliente que entrou em contato.
@@ -108,16 +113,19 @@ ${
     : `[TELEFONE DO CLIENTE]: Não detectado automaticamente. Você deve solicitar o número com DDD.`
 }
 
+[CATÁLOGO DE LANÇAMENTOS IMOBILIÁRIOS / NA PLANTA DISPONÍVEIS]:
+${lancamentosText}
+
 MISSÃO:
-Realizar o atendimento inicial com simpatia e agilidade, coletar o nome, confirmar/coletar o telefone, entender a intenção (Comprar/Alugar/Vender) e o imóvel de interesse, anotar observações e preparar a ficha do lead para o corretor.
+Realizar o atendimento inicial com simpatia, energia e agilidade, coletar o nome, confirmar/coletar o telefone, entender a intenção (Comprar Pronto, Lançamentos na Planta, Alugar, Vender ou Dúvidas), o imóvel de interesse, anotar observações e preparar a ficha do lead para o corretor fechar a venda.
 
 REGRAS OBRIGATÓRIAS:
 1. Faça UMA única pergunta por vez. Mensagens concisas, profissionais e com emojis moderados.
 2. NUNCA confunda os campos:
    - "Nome": O nome completo real do cliente (ex: Adriano Toledo). NUNCA coloque saudações ("Oi", "bom dia") como Nome!
    - "Telefone": O número com DDD (ex: (21) 97202-0348). NUNCA coloque o telefone no campo Tipo de Atendimento!
-   - "Tipo de atendimento": Comprar, Alugar, Vender ou Tirar Dúvidas.
-   - "Produto ou imóvel": Apartamento 2 quartos, Casa, etc.
+   - "Tipo de atendimento": Comprar Pronto, Lançamento na Planta, Alugar, Vender ou Tirar Dúvidas.
+   - "Produto ou imóvel": Nome do lançamento e/ou descrição do imóvel (ex: Reserva Jardim Barra - 3 Quartos com Suíte).
    - "Observações": Detalhes adicionais, link/código do imóvel enviado, ou preferências.
 3. FLUXO CONVERSACIONAL:
    - Se o cliente mandou apenas uma saudação ("bom dia", "olá"): Cumprimente de volta e pergunte o Nome Completo dele.
@@ -127,9 +135,11 @@ REGRAS OBRIGATÓRIAS:
          ? `Agradeça e confirme o telefone: "Prazer em falar com você, [Nome]! Identifiquei seu número de WhatsApp como ${displayPhone}. Este é o melhor telefone para o corretor falar com você ou você prefere informar outro número?"`
          : `Agradeça e peça o telefone com DDD: "Prazer em falar com você, [Nome]! Qual é o seu número de WhatsApp com DDD para o corretor entrar em contato com você?"`
      }
-   - Quando o telefone for confirmado/informado: Pergunte o Tipo de Atendimento (*Comprar*, *Alugar*, *Vender* ou *Tirar Dúvidas*).
-   - Em seguida: Pergunte o tipo de imóvel (ex: quantos quartos, bairro de interesse...).
-   - Em seguida: Pergunte se há alguma observação adicional importante.
+   - Quando o telefone for confirmado/informado: Pergunte o Tipo de Atendimento (*Comprar Imóvel Pronto*, *Lançamentos na Planta*, *Alugar*, *Vender* ou *Tirar Dúvidas*).
+   - SE O CLIENTE ESCOLHER "LANÇAMENTOS / NA PLANTA":
+     Apresente resumidamente os lançamentos disponíveis no nosso catálogo acima e pergunte qual deles mais chama a atenção dele.
+     Quando ele escolher o empreendimento, informe os diferenciais e pergunte a tipologia desejada (ex: 2 ou 3 quartos). Se houver link do book cadastrado, você pode compartilhar o link no chat.
+   - Em seguida: Pergunte se há alguma observação adicional importante ou urgência.
    - Ao final: Mostre um resumo breve dos dados e peça a confirmação.
 4. Se o cliente pedir corretor humano a qualquer momento, finalize educadamente dizendo que está transferindo.
 5. Quando o cliente confirmar ou pedir corretor, emita OBRIGATORIAMENTE no final da resposta o seguinte bloco:
@@ -137,9 +147,9 @@ REGRAS OBRIGATÓRIAS:
 NOVO LEAD
 Nome: [Nome real do cliente]
 Telefone: [Telefone com DDD]
-Tipo de atendimento: [Comprar, Vender, Alugar ou Tirar Dúvidas]
-Produto ou imóvel: [Descrição do imóvel]
-Observações: [Observações do cliente e link do imóvel se houver]
+Tipo de atendimento: [Comprar Pronto, Lançamento na Planta, Alugar, Vender ou Tirar Dúvidas]
+Produto ou imóvel: [Empreendimento / Imóvel e Tipologia]
+Observações: [Observações do cliente e link do imóvel/book se houver]
 Consentimento para contato: Sim, autorizado conforme LGPD
 Origem: WhatsApp Web Direct Houses
 Status: Aguardando contato do corretor`;
@@ -233,7 +243,8 @@ function getFallbackReply(
   // Detect service type in conversation
   const fullUserText = userMsgs.map((m) => m.content).join(' ');
   if (!session.extractedLead.tipoAtendimento) {
-    if (/\bcompr(ar|a|o)?\b/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Comprar';
+    if (/\blan[çc]amento(s)?\b|na planta|em constru[çc][ãa]o/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Lançamento na Planta';
+    else if (/\bcompr(ar|a|o)?\b/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Comprar Imóvel Pronto';
     else if (/\balug(ar|uel|o)?\b/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Alugar';
     else if (/\bvend(er|a|o)?\b/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Vender';
     else if (/d[uú]vida/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Tirar Dúvidas';
@@ -241,13 +252,31 @@ function getFallbackReply(
 
   // 3. Ask Service Type
   if (!session.extractedLead.tipoAtendimento) {
-    return `Excelente! Qual tipo de atendimento você procura hoje: *Comprar*, *Alugar*, *Vender* um imóvel ou *Tirar dúvidas*?`;
+    return `Excelente! Qual tipo de atendimento você procura hoje: *Lançamentos (na planta)*, *Comprar imóvel pronto*, *Alugar*, *Vender* ou *Tirar dúvidas*?`;
   }
 
-  // 4. Ask Property Details
+  // 4. Ask Property Details or show Lançamentos
   if (!session.extractedLead.produtoImovel) {
-    // If last message has property hints (e.g. 2 quartos, casa, apto)
-    if (/(quarto|casa|apto|apartamento|cobertura|sala|terreno|lote|imovel)/i.test(lastUserMsg)) {
+    if (session.extractedLead.tipoAtendimento.includes('Lançamento')) {
+      const activeLanc = getActiveLancamentos();
+      if (activeLanc.length > 0) {
+        // If user already named one
+        const matched = activeLanc.find((l) => lowerLastMsg.includes(l.nome.toLowerCase()));
+        if (matched) {
+          session.extractedLead.produtoImovel = `Lançamento ${matched.nome} (${matched.tipologias})`;
+        } else {
+          return (
+            `Temos excelentes opções de *Lançamentos na planta* disponíveis:\n\n` +
+            activeLanc
+              .map((l, i) => `🏢 *${i + 1}. ${l.nome}* (${l.bairro})\n• Tipologias: ${l.tipologias}\n• Preço: ${l.precoAPartirDe || 'Consulte'}`)
+              .join('\n\n') +
+            `\n\nQual desses empreendimentos mais combina com o que você procura?`
+          );
+        }
+      }
+    }
+
+    if (/(quarto|casa|apto|apartamento|cobertura|sala|terreno|lote|imovel|reserva|iconic)/i.test(lastUserMsg)) {
       session.extractedLead.produtoImovel = lastUserMsg;
     } else {
       return `Excelente! Que tipo de imóvel você tem em mente? (Por exemplo: apartamento de 2 ou 3 quartos, casa em condomínio, sala comercial, bairro de preferência...)`;

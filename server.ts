@@ -39,6 +39,13 @@ import {
   deletePersistentLead,
   clearAllPersistentLeads,
 } from './leads-service';
+import {
+  getLancamentos,
+  addLancamento,
+  updateLancamento,
+  deleteLancamento,
+  getActiveLancamentos,
+} from './lancamentos-service';
 
 dotenv.config();
 
@@ -990,6 +997,56 @@ app.delete('/api/leads/:id', (req, res) => {
 app.delete('/api/leads', (req, res) => {
   try {
     const success = clearAllPersistentLeads();
+    res.json({ success });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// Lançamentos Imobiliários Endpoints
+// ==========================================
+
+// Get all lançamentos
+app.get('/api/lancamentos', (req, res) => {
+  try {
+    res.json(getLancamentos());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add new lançamento
+app.post('/api/lancamentos', (req, res) => {
+  try {
+    const { nome, bairro, cidade, construtora, tipologias, precoAPartirDe, diferenciais, linkBookPdf, active } = req.body || {};
+    if (!nome || !bairro) {
+      return res.status(400).json({ error: 'Nome do empreendimento e bairro são obrigatórios.' });
+    }
+    const item = addLancamento({ nome, bairro, cidade, construtora, tipologias, precoAPartirDe, diferenciais, linkBookPdf, active });
+    res.json(item);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update lançamento
+app.put('/api/lancamentos/:id', (req, res) => {
+  try {
+    const updated = updateLancamento(req.params.id, req.body || {});
+    if (!updated) {
+      return res.status(404).json({ error: 'Lançamento não encontrado.' });
+    }
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete lançamento
+app.delete('/api/lancamentos/:id', (req, res) => {
+  try {
+    const success = deleteLancamento(req.params.id);
     res.json({ success });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

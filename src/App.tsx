@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Building2,
+  Building,
   ShieldCheck,
   Settings,
   History,
@@ -19,6 +20,7 @@ import { WhatsAppConnectModal } from './components/WhatsAppConnectModal';
 import { BrokersManagementModal } from './components/BrokersManagementModal';
 import { LoginScreen } from './components/LoginScreen';
 import { AuthorizedUsersModal } from './components/AuthorizedUsersModal';
+import { LancamentosModal, LancamentoItem } from './components/LancamentosModal';
 
 const INITIAL_SETTINGS: AppSettings = {
   companyName: 'Direct Houses',
@@ -73,6 +75,7 @@ export default function App() {
   // Persistent Leads State from Server
   const [persistentLeads, setPersistentLeads] = useState<PersistentLeadData[]>([]);
   const [brokers, setBrokers] = useState<Broker[]>([]);
+  const [lancamentos, setLancamentos] = useState<LancamentoItem[]>([]);
 
   // WhatsApp Web State
   const [whatsAppStatus, setWhatsAppStatus] = useState<WhatsAppStatus>({
@@ -98,6 +101,7 @@ export default function App() {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [isBrokersModalOpen, setIsBrokersModalOpen] = useState(false);
+  const [isLancamentosModalOpen, setIsLancamentosModalOpen] = useState(false);
 
   // Handle Login & Logout
   const handleLoginSuccess = (user: AuthUser) => {
@@ -143,6 +147,7 @@ export default function App() {
   }, []);
 
   // Fetch brokers
+  // Fetch brokers
   const fetchBrokers = useCallback(async () => {
     try {
       const res = await fetch('/api/brokers');
@@ -152,6 +157,19 @@ export default function App() {
       }
     } catch (err) {
       console.error('Erro ao buscar corretores:', err);
+    }
+  }, []);
+
+  // Fetch lancamentos
+  const fetchLancamentos = useCallback(async () => {
+    try {
+      const res = await fetch('/api/lancamentos');
+      if (res.ok) {
+        const data = await res.json();
+        setLancamentos(data);
+      }
+    } catch (err) {
+      console.error('Erro ao buscar lançamentos:', err);
     }
   }, []);
 
@@ -207,185 +225,22 @@ export default function App() {
     fetchWhatsAppStatus();
     fetchPersistentLeads();
     fetchBrokers();
+    fetchLancamentos();
 
     const interval = setInterval(() => {
       fetchWhatsAppStatus();
       fetchPersistentLeads();
       fetchBrokers();
+      fetchLancamentos();
     }, 3500);
 
     return () => clearInterval(interval);
-  }, [fetchWhatsAppStatus, fetchPersistentLeads, fetchBrokers]);
+  }, [fetchWhatsAppStatus, fetchPersistentLeads, fetchBrokers, fetchLancamentos]);
 
   // Persist settings
   const handleSaveSettings = (newSettings: AppSettings) => {
     setSettings(newSettings);
     localStorage.setItem('assistente_settings', JSON.stringify(newSettings));
-  };
-
-  // Dispatch Automations (Make.com Webhook and/or Email)
-  const triggerAutomationDispatch = async (targetLead: LeadData, currentMsgs: Message[], force = false) => {
-    const isMakeActive = Boolean(settings.makeEnabled ?? settings.n8nEnabled);
-    if (!isMakeActive && !settings.emailEnabled) return;
-
-    const leadSignature = (targetLead.nome || '') + (targetLead.telefone || '') + (targetLead.tipoAtendimento || '');
-    if (!force && dispatchedLeadSession === leadSignature) return;
-
-    setAutomationStatus((prev) => ({ ...prev, isDispatching: true }));
-
-    try {
-      const res = await fetch('/api/automation/dispatch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lead: targetLead,
-          messages: currentMsgs.map((m) => ({ role: m.role, content: m.content, timestamp: m.timestamp })),
-          companyName: settings.companyName,
-          automations: {
-            makeEnabled: isMakeActive,
-            makeWebhookUrl: settings.makeWebhookUrl || settings.n8nWebhookUrl,
-            makeApiKey: settings.makeApiKey || settings.n8nSecretToken,
-            n8nEnabled: isMakeActive,
-            n8nWebhookUrl: settings.makeWebhookUrl || settings.n8nWebhookUrl,
-            n8nSecretToken: settings.makeApiKey || settings.n8nSecretToken,
-            emailEnabled: settings.emailEnabled,
-            emailRecipients: settings.emailRecipients,
-            smtpHost: settings.smtpHost,
-            smtpPort: settings.smtpPort,
-            smtpUser: settings.smtpUser,
-            smtpPass: settings.smtpPass,
-            smtpSecure: settings.smtpSecure,
-            smtpSenderName: settings.smtpSenderName,
-          },
-        }),
-      });
-
-      const data = await res.json();
-      setAutomationStatus({
-        lastDispatchedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isDispatching: false,
-        make: data.results?.make || data.results?.n8n,
-        n8n: data.results?.make || data.results?.n8n,
-        email: data.results?.email,
-      });
-
-      setDispatchedLeadSession(leadSignature);
-    } catch (err: any) {
-      setAutomationStatus((prev) => ({
-        ...prev,
-        isDispatching: false,
-        make: prev.make || { attempted: true, success: false, message: err.message || 'Erro ao enviar para Make' },
-        n8n: prev.n8n || { attempted: true, success: false, message: err.message || 'Erro ao enviar automação' },
-        email: prev.email || { attempted: true, success: false, message: err.message || 'Erro ao enviar e-mail' },
-      }));
-    }
-  };
-
-  // Persist leads to localStorage
-  const handleSaveLeadToHistory = () => {
-    if (isSavedInCurrentSession) return;
-    const newEntry: SavedLead = {
-      id: 'lead-' + Date.now(),
-      createdAt: new Date().toLocaleString('pt-BR'),
-      companyName: settings.companyName,
-      lead: { ...lead },
-      formattedText:
-        lead.finalStructuredText ||
-        `NOVO LEAD\n\nNome: ${lead.nome || 'Não informado'}\nTelefone: ${lead.telefone || 'Não informado'}\nTipo de atendimento: ${lead.tipoAtendimento || 'Não informado'}\nProduto ou imóvel: ${lead.produtoImovel || 'Não informado'}\nObservações: ${lead.observacoes || 'Nenhuma'}\nConsentimento para contato: ${lead.consentimento || 'Sim, autorizado conforme LGPD'}\nOrigem: Site via WhatsApp\nStatus: Aguardando contato do corretor`,
-      transcriptCount: messages.length,
-    };
-
-    const updated = [newEntry, ...savedLeads];
-    setSavedLeads(updated);
-    localStorage.setItem('assistente_saved_leads', JSON.stringify(updated));
-    setIsSavedInCurrentSession(true);
-  };
-
-  const handleDeleteSavedLead = (id: string) => {
-    const updated = savedLeads.filter((l) => l.id !== id);
-    setSavedLeads(updated);
-    localStorage.setItem('assistente_saved_leads', JSON.stringify(updated));
-  };
-
-  const handleClearAllHistory = () => {
-    if (window.confirm('Tem certeza que deseja apagar todos os leads salvos no histórico?')) {
-      setSavedLeads([]);
-      localStorage.removeItem('assistente_saved_leads');
-    }
-  };
-
-  // Handle sending message
-  const handleSendMessage = async (text: string) => {
-    if (!text.trim() || isLoading) return;
-
-    const userMsg: Message = {
-      id: 'msg-user-' + Date.now(),
-      role: 'user',
-      content: text,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-
-    const newMessages = [...messages, userMsg];
-    setMessages(newMessages);
-    setIsLoading(true);
-
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
-          companyName: settings.companyName,
-          whatsappAvailable: settings.whatsappAvailableInSystem,
-          whatsappNumber: settings.systemWhatsappNumber,
-        }),
-      });
-
-      const data = await response.json();
-      const assistantMsg: Message = {
-        id: 'msg-assistant-' + Date.now(),
-        role: 'assistant',
-        content: data.reply || 'Entendido. Um momento enquanto verifico os dados.',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        quickReplies: data.quickReplies || [],
-        isFinalHandover: Boolean(data.reply && data.reply.includes('NOVO LEAD')),
-      };
-
-      const updatedMsgsWithAssistant = [...newMessages, assistantMsg];
-      setMessages(updatedMsgsWithAssistant);
-
-      if (data.extractedLead) {
-        setLead(data.extractedLead);
-
-        // AUTO DISPATCH: If the lead is complete or requested a human, automatically trigger n8n and/or email!
-        if (data.extractedLead.isComplete || data.extractedLead.humanRequested) {
-          triggerAutomationDispatch(data.extractedLead, updatedMsgsWithAssistant);
-        }
-      }
-
-      if (settings.soundEnabled) {
-        playMessageSound();
-      }
-    } catch (err) {
-      console.warn('Chat request notice:', err);
-      const errorMsg: Message = {
-        id: 'msg-err-' + Date.now(),
-        role: 'assistant',
-        content: `Obrigado pelas informações! Estamos registrando seus dados para a equipe da ${settings.companyName}. Um de nossos corretores entrará em contato em breve.`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-      setMessages((prev) => [...prev, errorMsg]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleResetChat = () => {
-    initGreeting(settings);
-  };
-
-  const handleSelectPresetScenario = (scenarioText: string) => {
-    handleSendMessage(scenarioText);
   };
 
   if (!currentUser) {
@@ -483,6 +338,17 @@ export default function App() {
               <span className="hidden md:inline">Roleta Corretores</span>
             </button>
 
+            {/* Lançamentos & Books Button */}
+            <button
+              id="open-lancamentos-btn"
+              onClick={() => setIsLancamentosModalOpen(true)}
+              className="px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-purple-700 bg-slate-50 hover:bg-purple-50 rounded-xl border border-slate-200 hover:border-purple-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Lançamentos & Books de Apresentação"
+            >
+              <Building className="w-4 h-4 text-purple-600" />
+              <span className="hidden md:inline">Lançamentos</span>
+            </button>
+
             {/* Rules Button */}
             <button
               id="open-rules-btn"
@@ -569,10 +435,12 @@ export default function App() {
         <LeadsDashboard
           leads={persistentLeads}
           brokers={brokers}
+          lancamentosCount={lancamentos.length}
           whatsAppStatus={whatsAppStatus}
           companyName={settings.companyName}
           onOpenWhatsAppModal={() => setIsWhatsAppModalOpen(true)}
           onOpenBrokersModal={() => setIsBrokersModalOpen(true)}
+          onOpenLancamentosModal={() => setIsLancamentosModalOpen(true)}
           onRefreshLeads={fetchPersistentLeads}
           onDeleteLead={handleDeleteLead}
         />
@@ -596,6 +464,15 @@ export default function App() {
         }}
         companyName={settings.companyName}
         isWhatsAppConnected={whatsAppStatus.state === 'connected'}
+      />
+
+      <LancamentosModal
+        isOpen={isLancamentosModalOpen}
+        onClose={() => {
+          setIsLancamentosModalOpen(false);
+          fetchLancamentos();
+        }}
+        companyName={settings.companyName}
       />
 
       <RulesModal

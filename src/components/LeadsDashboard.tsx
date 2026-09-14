@@ -48,8 +48,10 @@ interface LeadsDashboardProps {
   brokers: Broker[];
   whatsAppStatus: WhatsAppStatus;
   companyName: string;
+  lancamentosCount?: number;
   onOpenWhatsAppModal: () => void;
   onOpenBrokersModal: () => void;
+  onOpenLancamentosModal: () => void;
   onRefreshLeads: () => void;
   onDeleteLead: (id: string) => void;
   onDispatchLeadToBroker?: (leadId: string, brokerId?: string) => void;
@@ -60,8 +62,10 @@ export function LeadsDashboard({
   brokers,
   whatsAppStatus,
   companyName,
+  lancamentosCount = 0,
   onOpenWhatsAppModal,
   onOpenBrokersModal,
+  onOpenLancamentosModal,
   onRefreshLeads,
   onDeleteLead,
   onDispatchLeadToBroker,
@@ -211,25 +215,24 @@ export function LeadsDashboard({
           </button>
         </div>
 
-        {/* Card 4: Recuperação 5 Min */}
+        {/* Card 4: Lançamentos & Books */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Recuperação 24/7</span>
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Lançamentos & Books</span>
             <div className="p-2 rounded-xl bg-purple-100 text-purple-600">
-              <ShieldCheck className="w-5 h-5" />
+              <Building className="w-5 h-5" />
             </div>
           </div>
           <div className="mt-3">
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800">
-              Timeout 5 min Ativo
-            </span>
-            <p className="text-xs text-slate-500 mt-1.5">
-              Leads que param de responder são despachados automaticamente para o corretor.
-            </p>
+            <div className="text-2xl font-black text-slate-900 leading-none">{lancamentosCount}</div>
+            <p className="text-xs text-slate-500 mt-1">Empreendimentos no catálogo da IA</p>
           </div>
-          <div className="mt-3 text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
-            <CheckCircle2 className="w-3.5 h-3.5" /> Proteção contra perda de leads
-          </div>
+          <button
+            onClick={onOpenLancamentosModal}
+            className="mt-3 w-full py-1.5 px-3 text-xs font-semibold rounded-xl border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-700 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+          >
+            Gerenciar Lançamentos
+          </button>
         </div>
 
       </div>
