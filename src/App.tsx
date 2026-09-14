@@ -342,15 +342,18 @@ export default function App() {
               <span className="hidden md:inline">Roleta Corretores</span>
             </button>
 
-            {/* Lançamentos & Books Button */}
+            {/* Lançamentos & Governança IA Button */}
             <button
               id="open-lancamentos-btn"
               onClick={() => setIsLancamentosModalOpen(true)}
-              className="px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-purple-700 bg-slate-50 hover:bg-purple-50 rounded-xl border border-slate-200 hover:border-purple-200 flex items-center gap-1.5 transition-colors cursor-pointer"
-              title="Lançamentos & Books de Apresentação"
+              className="px-3 py-1.5 text-xs font-semibold text-indigo-900 hover:text-indigo-950 bg-indigo-50/80 hover:bg-indigo-100 rounded-xl border border-indigo-200 hover:border-indigo-300 flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+              title="Catálogos de Lançamentos & Governança de Dados para IA"
             >
-              <Building className="w-4 h-4 text-purple-600" />
-              <span className="hidden md:inline">Lançamentos</span>
+              <Building className="w-4 h-4 text-indigo-600" />
+              <span className="hidden md:inline">Catálogos & Governança IA</span>
+              <span className="hidden lg:inline-flex px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                DLP
+              </span>
             </button>
 
             {/* Rules Button */}

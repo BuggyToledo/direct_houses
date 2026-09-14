@@ -46,6 +46,9 @@ import {
   updateLancamento,
   deleteLancamento,
   getActiveLancamentos,
+  getPublicLancamentosForAI,
+  runGovernanceSecurityTests,
+  sanitizeAndAuditAIResponse,
 } from './lancamentos-service';
 
 dotenv.config();
@@ -1006,10 +1009,10 @@ app.delete('/api/leads', (req, res) => {
 });
 
 // ==========================================
-// Lançamentos Imobiliários Endpoints
+// Lançamentos Imobiliários & Governança de Dados
 // ==========================================
 
-// Get all lançamentos
+// Get all lançamentos (Base completa com histórico)
 app.get('/api/lancamentos', (req, res) => {
   try {
     res.json(getLancamentos());
@@ -1018,24 +1021,55 @@ app.get('/api/lancamentos', (req, res) => {
   }
 });
 
-// Add new lançamento
+// Get public catalog for AI (Base de Conteúdo Publicável)
+app.get('/api/lancamentos/public-ai', (req, res) => {
+  try {
+    res.json(getPublicLancamentosForAI());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add new lançamento com governança e versionamento
 app.post('/api/lancamentos', (req, res) => {
   try {
-    const { nome, bairro, cidade, construtora, tipologias, precoAPartirDe, diferenciais, linkBookPdf, active } = req.body || {};
+    const { nome, bairro, usuarioResponsavel } = req.body || {};
     if (!nome || !bairro) {
       return res.status(400).json({ error: 'Nome do empreendimento e bairro são obrigatórios.' });
     }
-    const item = addLancamento({ nome, bairro, cidade, construtora, tipologias, precoAPartirDe, diferenciais, linkBookPdf, active });
+    const item = addLancamento(req.body, usuarioResponsavel || 'Equipe Direct House');
     res.json(item);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Update lançamento
+// Update lançamento com auditoria de versão
 app.put('/api/lancamentos/:id', (req, res) => {
   try {
-    const updated = updateLancamento(req.params.id, req.body || {});
+    const { usuarioResponsavel } = req.body || {};
+    const updated = updateLancamento(req.params.id, req.body || {}, usuarioResponsavel || 'Equipe Direct House');
+    if (!updated) {
+      return res.status(404).json({ error: 'Lançamento não encontrado.' });
+    }
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update status rápido do catálogo (Ativo, Inativo, Em processamento, Atualização pendente, Arquivado)
+app.patch('/api/lancamentos/:id/status', (req, res) => {
+  try {
+    const { status, usuarioResponsavel } = req.body || {};
+    if (!status) {
+      return res.status(400).json({ error: 'Status é obrigatório.' });
+    }
+    const updated = updateLancamento(
+      req.params.id,
+      { status },
+      usuarioResponsavel || 'Equipe Direct House'
+    );
     if (!updated) {
       return res.status(404).json({ error: 'Lançamento não encontrado.' });
     }
@@ -1050,6 +1084,38 @@ app.delete('/api/lancamentos/:id', (req, res) => {
   try {
     const success = deleteLancamento(req.params.id);
     res.json({ success });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Executa suíte de 12 testes de governança e segurança da IA
+app.post('/api/lancamentos/governance-test', (req, res) => {
+  try {
+    const results = runGovernanceSecurityTests();
+    const allPassed = results.every((t) => t.passed);
+    res.json({
+      success: allPassed,
+      totalTests: results.length,
+      passedCount: results.filter((t) => t.passed).length,
+      tests: results,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Simula auditoria de texto em tempo real com o filtro DLP
+app.post('/api/lancamentos/simulate-audit', (req, res) => {
+  try {
+    const { prompt, generatedText, companyName } = req.body || {};
+    const audit = sanitizeAndAuditAIResponse(
+      generatedText || prompt || '',
+      prompt || '',
+      companyName || 'Direct Houses'
+    );
+    res.json(audit);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
