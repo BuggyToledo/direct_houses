@@ -150,3 +150,20 @@ export interface WhatsAppChatSession {
   lastActivity: string;
 }
 
+export interface AuthUser {
+  email: string;
+  name: string;
+  picture?: string;
+  role: 'admin' | 'user';
+  token: string;
+}
+
+export interface AuthorizedUser {
+  email: string;
+  name?: string;
+  role: 'admin' | 'user';
+  addedAt: string;
+  isPermanentAdmin?: boolean;
+}
+
+

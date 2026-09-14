@@ -22,6 +22,17 @@ import {
   formatBrokerLeadMessage,
   formatClientAssignedMessage,
 } from './broker-roleta';
+import {
+  verifyGoogleIdToken,
+  isEmailAuthorized,
+  createSession,
+  getSessionUser,
+  deleteSession,
+  getAuthorizedUsers,
+  addAuthorizedUser,
+  removeAuthorizedUser,
+  GLOBAL_ADMIN_EMAIL,
+} from './auth-service';
 
 dotenv.config();
 
@@ -368,6 +379,140 @@ function parseLeadFromTranscriptLocally(
 // API Routes
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', hasGeminiKey: Boolean(process.env.GEMINI_API_KEY) });
+});
+
+// ==========================================
+// Google Authentication & Whitelist Endpoints
+// ==========================================
+
+// Return Google Client ID for frontend GIS
+app.get('/api/auth/config', (req, res) => {
+  res.json({
+    googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+    globalAdmin: GLOBAL_ADMIN_EMAIL,
+  });
+});
+
+// Authenticate with Google ID Token & Whitelist check
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    const { credential } = req.body || {};
+    const verifyRes = await verifyGoogleIdToken(credential);
+
+    if (!verifyRes.success || !verifyRes.email) {
+      return res.status(401).json({
+        success: false,
+        error: verifyRes.error || 'Autenticação Google falhou.',
+      });
+    }
+
+    const authCheck = isEmailAuthorized(verifyRes.email);
+    if (!authCheck.authorized) {
+      return res.status(403).json({
+        success: false,
+        error: `O e-mail ${verifyRes.email} não possui autorização de acesso ao sistema Direct Houses. Entre em contato com o administrador (${GLOBAL_ADMIN_EMAIL}).`,
+      });
+    }
+
+    const sessionUser = createSession({
+      email: verifyRes.email,
+      name: verifyRes.name || authCheck.user?.name || verifyRes.email.split('@')[0],
+      picture: verifyRes.picture,
+      role: authCheck.user?.role || 'user',
+    });
+
+    res.json({ success: true, user: sessionUser });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Erro ao processar login Google.' });
+  }
+});
+
+// Direct email whitelist verification
+app.post('/api/auth/direct-verify', (req, res) => {
+  try {
+    const { email } = req.body || {};
+    const authCheck = isEmailAuthorized(email);
+
+    if (!authCheck.authorized || !authCheck.user) {
+      return res.status(403).json({
+        success: false,
+        error: `O e-mail ${email || ''} não possui autorização de acesso. Entre em contato com o administrador (${GLOBAL_ADMIN_EMAIL}).`,
+      });
+    }
+
+    const sessionUser = createSession({
+      email: authCheck.user.email,
+      name: authCheck.user.name || authCheck.user.email.split('@')[0],
+      role: authCheck.user.role || 'user',
+    });
+
+    res.json({ success: true, user: sessionUser });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get current logged-in user profile
+app.get('/api/auth/me', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: 'Não autenticado' });
+  const user = getSessionUser(authHeader);
+  if (!user) return res.status(401).json({ error: 'Sessão expirada ou inválida' });
+  res.json({ success: true, user });
+});
+
+// Logout
+app.post('/api/auth/logout', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader) deleteSession(authHeader);
+  res.json({ success: true, message: 'Sessão encerrada com sucesso.' });
+});
+
+// List authorized users (Admin only)
+app.get('/api/auth/users', (req, res) => {
+  const authHeader = req.headers.authorization;
+  const user = getSessionUser(authHeader || '');
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ error: 'Acesso restrito a administradores.' });
+  }
+  res.json(getAuthorizedUsers());
+});
+
+// Add authorized user to whitelist (Admin only)
+app.post('/api/auth/users', (req, res) => {
+  const authHeader = req.headers.authorization;
+  const user = getSessionUser(authHeader || '');
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ error: 'Acesso restrito a administradores.' });
+  }
+
+  try {
+    const { email, name, role } = req.body || {};
+    if (!email) {
+      return res.status(400).json({ error: 'E-mail é obrigatório.' });
+    }
+    const added = addAuthorizedUser({ email, name, role });
+    res.json({ success: true, user: added, users: getAuthorizedUsers() });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove authorized user from whitelist (Admin only)
+app.delete('/api/auth/users/:email', (req, res) => {
+  const authHeader = req.headers.authorization;
+  const user = getSessionUser(authHeader || '');
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ error: 'Acesso restrito a administradores.' });
+  }
+
+  try {
+    const { email } = req.params;
+    removeAuthorizedUser(email);
+    res.json({ success: true, users: getAuthorizedUsers(), message: 'Usuário removido da lista autorizada.' });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // Initial greeting route

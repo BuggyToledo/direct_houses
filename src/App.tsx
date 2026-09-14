@@ -13,8 +13,12 @@ import {
   Users,
   Smartphone,
   Radio,
+  LogOut,
+  KeyRound,
+  Crown,
+  User,
 } from 'lucide-react';
-import { Message, LeadData, AppSettings, SavedLead, AutomationStatus, WhatsAppStatus } from './types';
+import { Message, LeadData, AppSettings, SavedLead, AutomationStatus, WhatsAppStatus, AuthUser } from './types';
 import { ChatWindow } from './components/ChatWindow';
 import { BrokerLeadCard } from './components/BrokerLeadCard';
 import { RulesModal } from './components/RulesModal';
@@ -23,6 +27,8 @@ import { LeadHistoryModal } from './components/LeadHistoryModal';
 import { WhatsAppConnectModal } from './components/WhatsAppConnectModal';
 import { BrokersManagementModal } from './components/BrokersManagementModal';
 import { WhatsAppLiveChatsModal } from './components/WhatsAppLiveChatsModal';
+import { LoginScreen } from './components/LoginScreen';
+import { AuthorizedUsersModal } from './components/AuthorizedUsersModal';
 import { playMessageSound } from './utils/audio';
 
 const INITIAL_SETTINGS: AppSettings = {
@@ -121,6 +127,17 @@ export default function App() {
     connectedName: null,
   });
 
+  // Authentication state
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    try {
+      const saved = localStorage.getItem('direct_houses_auth_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [isUsersModalOpen, setIsUsersModalOpen] = useState(false);
+
   // Modals state
   const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
@@ -131,6 +148,36 @@ export default function App() {
 
   // Mobile navigation tab
   const [mobileTab, setMobileTab] = useState<'chat' | 'crm'>('chat');
+
+  // Handle Login & Logout
+  const handleLoginSuccess = (user: AuthUser) => {
+    setCurrentUser(user);
+    localStorage.setItem('direct_houses_auth_user', JSON.stringify(user));
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem('direct_houses_auth_user');
+    if (window.google?.accounts?.id) {
+      window.google.accounts.id.disableAutoSelect();
+    }
+  };
+
+  // Validate session on mount
+  useEffect(() => {
+    if (currentUser?.token) {
+      fetch('/api/auth/me', {
+        headers: { Authorization: `Bearer ${currentUser.token}` },
+      })
+        .then((res) => {
+          if (!res.ok) {
+            console.warn('Sessão expirada ou não autorizada');
+            handleLogout();
+          }
+        })
+        .catch(() => {});
+    }
+  }, []);
 
   // WhatsApp polling & status check
   const fetchWhatsAppStatus = useCallback(async () => {
@@ -391,6 +438,15 @@ export default function App() {
     handleSendMessage(scenarioText);
   };
 
+  if (!currentUser) {
+    return (
+      <LoginScreen
+        companyName={settings.companyName}
+        onLoginSuccess={handleLoginSuccess}
+      />
+    );
+  }
+
   return (
     <div id="app-root" className="min-h-screen flex flex-col bg-slate-100 text-slate-900 font-sans">
       {/* Top Application Navbar */}
@@ -525,6 +581,59 @@ export default function App() {
                 <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
               )}
             </button>
+
+            {/* Admin: Authorized Users Management */}
+            {currentUser.role === 'admin' && (
+              <button
+                id="open-authorized-users-btn"
+                onClick={() => setIsUsersModalOpen(true)}
+                className="px-2.5 py-1.5 text-xs font-semibold text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 rounded-xl border border-purple-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="Gerenciar Usuários Autorizados"
+              >
+                <KeyRound className="w-4 h-4 text-purple-600" />
+                <span className="hidden xl:inline">Acessos</span>
+              </button>
+            )}
+
+            {/* User Profile & Logout */}
+            <div className="flex items-center gap-2 pl-1 sm:pl-2 border-l border-slate-200 ml-1">
+              <div className="flex items-center gap-2">
+                {currentUser.picture ? (
+                  <img
+                    src={currentUser.picture}
+                    alt={currentUser.name}
+                    className="w-8 h-8 rounded-full border border-slate-200 object-cover shadow-2xs"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center text-xs font-bold shadow-2xs">
+                    {currentUser.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div className="hidden 2xl:flex flex-col text-left">
+                  <span className="text-xs font-bold text-slate-800 leading-tight max-w-[120px] truncate">
+                    {currentUser.name}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-medium flex items-center gap-0.5">
+                    {currentUser.isPermanentAdmin ? (
+                      <span className="text-amber-600 font-semibold flex items-center gap-0.5">
+                        <Crown className="w-2.5 h-2.5" /> ADM Global
+                      </span>
+                    ) : (
+                      currentUser.role
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                id="logout-btn"
+                onClick={handleLogout}
+                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                title="Sair do Sistema"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -647,6 +756,12 @@ export default function App() {
         leads={savedLeads}
         onDeleteLead={handleDeleteSavedLead}
         onClearAll={handleClearAllHistory}
+      />
+
+      <AuthorizedUsersModal
+        isOpen={isUsersModalOpen}
+        onClose={() => setIsUsersModalOpen(false)}
+        currentUser={currentUser}
       />
     </div>
   );
