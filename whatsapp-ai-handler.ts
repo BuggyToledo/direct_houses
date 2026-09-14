@@ -7,6 +7,8 @@ import {
   formatClientAssignedMessage,
   cleanPhoneNumber,
   formatPhoneForDisplay,
+  isValidPhoneNumber,
+  extractPhoneFromText,
   getBrokers,
 } from './broker-roleta';
 
@@ -14,6 +16,7 @@ export interface WhatsAppChatSession {
   jid: string;
   phone: string;
   name: string;
+  initialMessage: string;
   messages: Array<{
     id: string;
     role: 'user' | 'assistant';
@@ -26,6 +29,7 @@ export interface WhatsAppChatSession {
     tipoAtendimento: string;
     produtoImovel: string;
     observacoes: string;
+    initialMessage?: string;
     consentimento: string;
     origem: string;
     status: string;
@@ -60,87 +64,220 @@ function getGeminiClient(): GoogleGenAI | null {
   });
 }
 
-function buildSystemPrompt(companyName: string = 'Direct Houses', customerPhone: string) {
-  const displayPhone = formatPhoneForDisplay(customerPhone);
+const CANDIDATE_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-3.8-flash',
+  'gemini-flash-latest',
+];
+
+function isGreetingOnly(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[!.?,]/g, '');
+  const greetings = [
+    'oi',
+    'ola',
+    'olá',
+    'bom dia',
+    'boa tarde',
+    'boa noite',
+    'opa',
+    'ola bom dia',
+    'oi bom dia',
+    'olá bom dia',
+    'ola boa tarde',
+    'oi boa tarde',
+    'tudo bem',
+    'ola tudo bem',
+    'oi tudo bem',
+  ];
+  return greetings.includes(t) || t.length <= 3;
+}
+
+function buildSystemPrompt(companyName: string = 'Direct Houses', customerPhone: string, initialMessage: string = '') {
+  const hasValidPhone = isValidPhoneNumber(customerPhone);
+  const displayPhone = hasValidPhone ? formatPhoneForDisplay(customerPhone) : '';
+
   return `Você é o assistente comercial oficial da imobiliária ${companyName}.
-Você está conversando DIRETAMENTE no WhatsApp com o cliente (número detectado na conexão: ${displayPhone}).
+Você está conversando DIRETAMENTE no WhatsApp com um cliente que entrou em contato.
 
-Sua missão é realizar o atendimento inicial, qualificar o interesse do cliente de forma calorosa, ágil e profissional, e preparar os dados para encaminhar a um corretor especialista.
+${initialMessage ? `[PRIMEIRA MENSAGEM DO CLIENTE / LINK DE ANÚNCIO]: "${initialMessage}"` : ''}
+${
+  hasValidPhone
+    ? `[TELEFONE DO CLIENTE DETECTADO AUTOMATICAMENTE]: ${displayPhone}`
+    : `[TELEFONE DO CLIENTE]: Não detectado automaticamente. Você deve solicitar o número com DDD.`
+}
 
-Regras Obrigatórias de Atendimento no WhatsApp:
-1. Seja cordial, conciso e use formatação limpa e emojis moderados adequados ao WhatsApp.
-2. Não envie blocos de texto gigantescos; envie mensagens diretas e agradáveis de ler no celular.
-3. Faça UMA única pergunta por vez para não sobrecarregar o cliente.
-4. Fluxo de perguntas obrigatório em ordem:
-   - 1ª Pergunta: Cumprimente e pergunte o Nome Completo do cliente.
-   - 2ª Pergunta (CONFIRMAÇÃO DO TELEFONE): Logo após o cliente responder o nome, confirme o telefone dizendo: "Prazer em falar com você, [Nome]! Identifiquei seu número de WhatsApp como ${displayPhone}. Este é o melhor telefone para o corretor falar com você ou você prefere informar outro número?".
-   - 3ª Pergunta: Pergunte o Tipo de Atendimento (*Comprar, Alugar, Vender ou Tirar Dúvidas*).
-   - 4ª Pergunta: Pergunte o Imóvel de Interesse (ex: apartamento 2 ou 3 quartos, casa em condomínio, bairro preferido...).
-   - 5ª Pergunta: Pergunte se há alguma Observação adicional ou urgência.
-   - 6ª Etapa: Mostre o resumo dos dados e peça a confirmação rápida e autorização LGPD.
-5. Se o cliente solicitar atendimento humano / falar com corretor em qualquer momento, finalize educadamente dizendo que está transferindo para a equipe.
-6. Se o cliente preferir informar outro telefone na 2ª pergunta, use o novo telefone informado por ele. Caso ele confirme ("sim", "pode ser", "este mesmo"), mantenha ${displayPhone}.
-7. Nunca invente valores, disponibilidades ou dados inexistentes.
-8. Ao receber a confirmação final do cliente (ou se ele pediu atendente humano), emita no final da sua resposta o bloco estruturado exatamente assim:
+MISSÃO:
+Realizar o atendimento inicial com simpatia e agilidade, coletar o nome, confirmar/coletar o telefone, entender a intenção (Comprar/Alugar/Vender) e o imóvel de interesse, anotar observações e preparar a ficha do lead para o corretor.
+
+REGRAS OBRIGATÓRIAS:
+1. Faça UMA única pergunta por vez. Mensagens concisas, profissionais e com emojis moderados.
+2. NUNCA confunda os campos:
+   - "Nome": O nome completo real do cliente (ex: Adriano Toledo). NUNCA coloque saudações ("Oi", "bom dia") como Nome!
+   - "Telefone": O número com DDD (ex: (21) 97202-0348). NUNCA coloque o telefone no campo Tipo de Atendimento!
+   - "Tipo de atendimento": Comprar, Alugar, Vender ou Tirar Dúvidas.
+   - "Produto ou imóvel": Apartamento 2 quartos, Casa, etc.
+   - "Observações": Detalhes adicionais, link/código do imóvel enviado, ou preferências.
+3. FLUXO CONVERSACIONAL:
+   - Se o cliente mandou apenas uma saudação ("bom dia", "olá"): Cumprimente de volta e pergunte o Nome Completo dele.
+   - Assim que o cliente disser o Nome:
+     ${
+       hasValidPhone
+         ? `Agradeça e confirme o telefone: "Prazer em falar com você, [Nome]! Identifiquei seu número de WhatsApp como ${displayPhone}. Este é o melhor telefone para o corretor falar com você ou você prefere informar outro número?"`
+         : `Agradeça e peça o telefone com DDD: "Prazer em falar com você, [Nome]! Qual é o seu número de WhatsApp com DDD para o corretor entrar em contato com você?"`
+     }
+   - Quando o telefone for confirmado/informado: Pergunte o Tipo de Atendimento (*Comprar*, *Alugar*, *Vender* ou *Tirar Dúvidas*).
+   - Em seguida: Pergunte o tipo de imóvel (ex: quantos quartos, bairro de interesse...).
+   - Em seguida: Pergunte se há alguma observação adicional importante.
+   - Ao final: Mostre um resumo breve dos dados e peça a confirmação.
+4. Se o cliente pedir corretor humano a qualquer momento, finalize educadamente dizendo que está transferindo.
+5. Quando o cliente confirmar ou pedir corretor, emita OBRIGATORIAMENTE no final da resposta o seguinte bloco:
 
 NOVO LEAD
-Nome: [Nome]
-Telefone: [Telefone Confirmado]
-Tipo de atendimento: [Comprar, Vender, Alugar ou Dúvidas]
-Produto ou imóvel: [Descrição do Imóvel]
-Observações: [Observações ou Nenhuma]
+Nome: [Nome real do cliente]
+Telefone: [Telefone com DDD]
+Tipo de atendimento: [Comprar, Vender, Alugar ou Tirar Dúvidas]
+Produto ou imóvel: [Descrição do imóvel]
+Observações: [Observações do cliente e link do imóvel se houver]
 Consentimento para contato: Sim, autorizado conforme LGPD
 Origem: WhatsApp Web Direct Houses
 Status: Aguardando contato do corretor`;
 }
 
-// Fallback rule-based bot for WhatsApp
+/**
+ * Robust Dialog State Machine for fallback when AI is offline or processing simple steps
+ */
 function getFallbackReply(
-  history: Array<{ role: 'user' | 'assistant'; content: string }>,
-  customerName: string,
-  customerPhone: string,
+  session: WhatsAppChatSession,
   companyName: string = 'Direct Houses'
 ): string {
-  const displayPhone = formatPhoneForDisplay(customerPhone);
-  const userMsgs = history.filter((m) => m.role === 'user');
-  const count = userMsgs.length;
-  const lastMsg = (userMsgs[userMsgs.length - 1]?.content || '').toLowerCase();
+  const userMsgs = session.messages.filter((m) => m.role === 'user');
+  const lastUserMsg = (userMsgs[userMsgs.length - 1]?.content || '').trim();
+  const lowerLastMsg = lastUserMsg.toLowerCase();
 
+  // Check for human broker request
   if (
-    lastMsg.includes('humano') ||
-    lastMsg.includes('corretor') ||
-    lastMsg.includes('falar com pessoa') ||
-    lastMsg.includes('atendente')
+    lowerLastMsg.includes('humano') ||
+    lowerLastMsg.includes('corretor') ||
+    lowerLastMsg.includes('falar com pessoa') ||
+    lowerLastMsg.includes('atendente')
   ) {
-    return `Perfeito! Estou transferindo seu atendimento agora mesmo para um de nossos corretores especialistas da ${companyName}.\n\nNOVO LEAD\nNome: ${customerName}\nTelefone: ${displayPhone}\nTipo de atendimento: Atendimento personalizado\nProduto ou imóvel: A definir com corretor\nObservações: Cliente solicitou contato com corretor.\nConsentimento para contato: Sim, autorizado conforme LGPD\nOrigem: WhatsApp Web Direct Houses\nStatus: Aguardando contato do corretor`;
+    const verifiedPhone = formatPhoneForDisplay(session.phone) || 'A definir';
+    return (
+      `Perfeito! Estou transferindo seu atendimento agora mesmo para um de nossos corretores especialistas da ${companyName}.\n\n` +
+      `NOVO LEAD\n` +
+      `Nome: ${session.name !== 'Cliente' ? session.name : 'Cliente WhatsApp'}\n` +
+      `Telefone: ${verifiedPhone}\n` +
+      `Tipo de atendimento: Atendimento personalizado\n` +
+      `Produto ou imóvel: ${session.extractedLead.produtoImovel || 'A combinar com corretor'}\n` +
+      `Observações: ${session.extractedLead.observacoes || 'Cliente solicitou falar com corretor.'}\n` +
+      `Consentimento para contato: Sim, autorizado conforme LGPD\n` +
+      `Origem: WhatsApp Web Direct Houses\n` +
+      `Status: Aguardando contato do corretor`
+    );
   }
 
-  switch (count) {
-    case 1:
-      return `Olá! Seja muito bem-vindo(a) à *${companyName}*. 🏡\n\nSou o assistente comercial virtual. Vou fazer algumas perguntas rápidas para entender o seu objetivo e conectá-lo(a) ao corretor ideal.\n\nPara começarmos, qual é o seu *nome completo*?`;
-    case 2: {
-      const clientName = userMsgs[0]?.content || customerName;
-      return `Muito prazer em falar com você, *${clientName}*! 😊\n\nIdentifiquei seu número de WhatsApp como *${displayPhone}*.\n\nEste é o melhor telefone para o corretor entrar em contato com você ou você prefere informar outro número?`;
+  // Extract any phone number present in user messages
+  for (const m of userMsgs) {
+    const detectedPhone = extractPhoneFromText(m.content);
+    if (detectedPhone && isValidPhoneNumber(detectedPhone)) {
+      session.phone = detectedPhone;
+      session.extractedLead.telefone = formatPhoneForDisplay(detectedPhone);
     }
-    case 3:
-      return `Excelente! Qual tipo de atendimento você procura hoje: *Comprar*, *Alugar*, *Vender* um imóvel ou *Tirar dúvidas*?`;
-    case 4:
-      return `Excelente! Que tipo de imóvel você tem em mente? (Por exemplo: apartamento de 2 ou 3 quartos, casa em condomínio, sala comercial, região de preferência...)`;
-    case 5:
-      return `Perfeito! Há alguma observação adicional importante (como vaga de garagem, faixa de valor ou urgência)? Se não houver, pode apenas me dizer "sem observações".`;
-    case 6: {
-      const clientName = userMsgs[0]?.content || customerName;
-      return `Ótimo! Antes de encaminhar ao corretor, por favor confirme se seus dados estão corretos:\n\n• Nome: ${clientName}\n• Telefone: ${displayPhone}\n• Interesse: ${
-        userMsgs[2]?.content || 'Imobiliário'
-      }\n• Imóvel: ${userMsgs[3]?.content || 'Conforme conversa'}\n\nVocê confirma esses dados e autoriza o contato do corretor?`;
-    }
-    default:
-      return `Muito obrigado pela confirmação! 👍\n\nEstou gerando a sua ficha de atendimento para o corretor responsável da ${companyName}.\n\nNOVO LEAD\nNome: ${
-        userMsgs[0]?.content || customerName
-      }\nTelefone: ${displayPhone}\nTipo de atendimento: ${userMsgs[2]?.content || 'Comprar/Alugar'}\nProduto ou imóvel: ${
-        userMsgs[3]?.content || 'Imóvel residencial'
-      }\nObservações: ${userMsgs[4]?.content || 'Nenhuma'}\nConsentimento para contato: Sim, autorizado conforme LGPD\nOrigem: WhatsApp Web Direct Houses\nStatus: Aguardando contato do corretor`;
   }
+
+  // Extract name if available (first non-greeting message)
+  if (session.name === 'Cliente' || !session.name) {
+    for (const m of userMsgs) {
+      if (!isGreetingOnly(m.content) && !extractPhoneFromText(m.content)) {
+        session.name = m.content.trim().split('\n')[0].replace(/[!.,]/g, '');
+        session.extractedLead.nome = session.name;
+        break;
+      }
+    }
+  }
+
+  const hasValidPhone = isValidPhoneNumber(session.phone);
+  const displayPhone = hasValidPhone ? formatPhoneForDisplay(session.phone) : '';
+
+  // 1. Initial Greeting if user just said hello
+  if (userMsgs.length === 1 && isGreetingOnly(lastUserMsg)) {
+    return (
+      `Olá! Seja muito bem-vindo(a) à *${companyName}*. 🏡\n\n` +
+      `Sou o assistente comercial virtual. Vou fazer algumas perguntas rápidas para entender o que você procura e conectá-lo(a) ao corretor ideal.\n\n` +
+      `Para começarmos, qual é o seu *nome completo*?`
+    );
+  }
+
+  // 2. Name just provided, ask / confirm phone
+  if (session.name !== 'Cliente' && !session.extractedLead.tipoAtendimento) {
+    if (hasValidPhone && !session.extractedLead.telefone) {
+      session.extractedLead.telefone = displayPhone;
+      return (
+        `Muito prazer em falar com você, *${session.name}*! 😊\n\n` +
+        `Identifiquei seu número de WhatsApp como *${displayPhone}*.\n\n` +
+        `Este é o melhor telefone para o corretor falar com você ou você prefere informar outro número?`
+      );
+    }
+
+    // If phone was not pre-detected and not yet given
+    if (!hasValidPhone) {
+      return (
+        `Muito prazer em falar com você, *${session.name}*! 😊\n\n` +
+        `Qual é o seu *número de WhatsApp com DDD* para o corretor entrar em contato com você?`
+      );
+    }
+  }
+
+  // Detect service type in conversation
+  const fullUserText = userMsgs.map((m) => m.content).join(' ');
+  if (!session.extractedLead.tipoAtendimento) {
+    if (/\bcompr(ar|a|o)?\b/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Comprar';
+    else if (/\balug(ar|uel|o)?\b/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Alugar';
+    else if (/\bvend(er|a|o)?\b/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Vender';
+    else if (/d[uú]vida/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Tirar Dúvidas';
+  }
+
+  // 3. Ask Service Type
+  if (!session.extractedLead.tipoAtendimento) {
+    return `Excelente! Qual tipo de atendimento você procura hoje: *Comprar*, *Alugar*, *Vender* um imóvel ou *Tirar dúvidas*?`;
+  }
+
+  // 4. Ask Property Details
+  if (!session.extractedLead.produtoImovel) {
+    // If last message has property hints (e.g. 2 quartos, casa, apto)
+    if (/(quarto|casa|apto|apartamento|cobertura|sala|terreno|lote|imovel)/i.test(lastUserMsg)) {
+      session.extractedLead.produtoImovel = lastUserMsg;
+    } else {
+      return `Excelente! Que tipo de imóvel você tem em mente? (Por exemplo: apartamento de 2 ou 3 quartos, casa em condomínio, sala comercial, bairro de preferência...)`;
+    }
+  }
+
+  // 5. Ask Observations
+  if (!session.extractedLead.observacoes) {
+    return `Perfeito! Há alguma observação adicional importante (como vaga de garagem, faixa de valor ou urgência)? Se não houver, pode me dizer apenas "sem observações".`;
+  }
+
+  // 6. Confirmation & Summary
+  const finalNome = session.extractedLead.nome || session.name || 'Cliente';
+  const finalPhone = session.extractedLead.telefone || displayPhone || 'A definir';
+  const finalTipo = session.extractedLead.tipoAtendimento || 'Comprar';
+  const finalImovel = session.extractedLead.produtoImovel || 'Imóvel residencial';
+  const finalObs = session.extractedLead.observacoes || (session.initialMessage ? `Origem: ${session.initialMessage}` : 'Nenhuma');
+
+  return (
+    `Muito obrigado pela confirmação! 👍\n\n` +
+    `Estou gerando a sua ficha de atendimento para o corretor especialista da ${companyName}.\n\n` +
+    `NOVO LEAD\n` +
+    `Nome: ${finalNome}\n` +
+    `Telefone: ${finalPhone}\n` +
+    `Tipo de atendimento: ${finalTipo}\n` +
+    `Produto ou imóvel: ${finalImovel}\n` +
+    `Observações: ${finalObs}\n` +
+    `Consentimento para contato: Sim, autorizado conforme LGPD\n` +
+    `Origem: WhatsApp Web Direct Houses\n` +
+    `Status: Aguardando contato do corretor`
+  );
 }
 
 // Structured lead extractor
@@ -150,6 +287,14 @@ function extractLeadFromSession(session: WhatsAppChatSession) {
     .filter((m) => m.role === 'user')
     .map((m) => m.content)
     .join(' ');
+
+  // Extract any phone number mentioned in chat
+  for (const m of session.messages.filter((msg) => msg.role === 'user')) {
+    const detected = extractPhoneFromText(m.content);
+    if (detected && isValidPhoneNumber(detected)) {
+      session.phone = detected;
+    }
+  }
 
   const hasNovoLead = fullText.includes('NOVO LEAD');
   let finalStructuredText = '';
@@ -173,24 +318,54 @@ function extractLeadFromSession(session: WhatsAppChatSession) {
 
   let tipo = blockTipo;
   if (!tipo) {
-    if (/\bcompr(ar|a|o)?\b/i.test(userText)) tipo = 'comprar';
-    else if (/\balug(ar|uel|o)?\b/i.test(userText)) tipo = 'alugar';
-    else if (/\bvend(er|a|o)?\b/i.test(userText)) tipo = 'vender';
-    else if (/d[uú]vida/i.test(userText)) tipo = 'tirar dúvidas';
+    if (/\bcompr(ar|a|o)?\b/i.test(userText)) tipo = 'Comprar';
+    else if (/\balug(ar|uel|o)?\b/i.test(userText)) tipo = 'Alugar';
+    else if (/\bvend(er|a|o)?\b/i.test(userText)) tipo = 'Vender';
+    else if (/d[uú]vida/i.test(userText)) tipo = 'Tirar Dúvidas';
   }
 
   const humanRequested = /(atendente\s*humano|falar\s*com\s*(um\s*)?humano|falar\s*com\s*(uma\s*)?pessoa|corretor)/i.test(
     userText
   );
   const isFinished = hasNovoLead || humanRequested;
-  const verifiedPhone = blockTelefone || formatPhoneForDisplay(session.phone);
+
+  // Clean and format telephone
+  let finalPhone = blockTelefone;
+  if (finalPhone && extractPhoneFromText(finalPhone)) {
+    finalPhone = formatPhoneForDisplay(extractPhoneFromText(finalPhone)!);
+  } else if (isValidPhoneNumber(session.phone)) {
+    finalPhone = formatPhoneForDisplay(session.phone);
+  } else {
+    finalPhone = 'Não informado';
+  }
+
+  // Clean Name so greetings are never names
+  let finalName = blockNome || session.name || '';
+  if (isGreetingOnly(finalName) || !finalName || finalName === 'Cliente') {
+    // Search user messages for a valid name
+    for (const msg of session.messages.filter((m) => m.role === 'user')) {
+      if (!isGreetingOnly(msg.content) && !extractPhoneFromText(msg.content)) {
+        finalName = msg.content.trim().split('\n')[0].replace(/[!.,]/g, '');
+        break;
+      }
+    }
+  }
+  if (!finalName) finalName = 'Cliente WhatsApp';
+
+  // Build observations including initial message if any
+  let obs = blockObs || (humanRequested ? 'Cliente solicitou falar com corretor.' : '');
+  if (session.initialMessage && !obs.includes(session.initialMessage) && session.initialMessage !== finalName) {
+    obs = obs ? `${obs} | Mensagem inicial: "${session.initialMessage}"` : `Mensagem inicial: "${session.initialMessage}"`;
+  }
+  if (!obs) obs = 'Nenhuma';
 
   session.extractedLead = {
-    nome: blockNome || session.name || 'Cliente',
-    telefone: verifiedPhone,
-    tipoAtendimento: tipo || 'Interesse imobiliário',
-    produtoImovel: blockProduto || 'A combinar',
-    observacoes: blockObs || (humanRequested ? 'Cliente solicitou falar com corretor.' : 'Nenhuma'),
+    nome: finalName,
+    telefone: finalPhone,
+    tipoAtendimento: tipo || 'Comprar',
+    produtoImovel: blockProduto || 'A combinar com corretor',
+    observacoes: obs,
+    initialMessage: session.initialMessage,
     consentimento: 'Sim, autorizado conforme LGPD',
     origem: 'WhatsApp Web Direct Houses',
     status: isFinished ? 'Qualificado - Aguardando corretor' : 'Em atendimento inicial',
@@ -199,11 +374,9 @@ function extractLeadFromSession(session: WhatsAppChatSession) {
     finalStructuredText:
       finalStructuredText ||
       (isFinished
-        ? `NOVO LEAD\nNome: ${blockNome || session.name || 'Cliente'}\nTelefone: ${verifiedPhone}\nTipo de atendimento: ${
-            tipo || 'Interesse imobiliário'
-          }\nProduto ou imóvel: ${blockProduto || 'A combinar'}\nObservações: ${
-            blockObs || 'Nenhuma'
-          }\nConsentimento para contato: Sim, autorizado conforme LGPD\nOrigem: WhatsApp Web Direct Houses\nStatus: Aguardando contato do corretor`
+        ? `NOVO LEAD\nNome: ${finalName}\nTelefone: ${finalPhone}\nTipo de atendimento: ${
+            tipo || 'Comprar'
+          }\nProduto ou imóvel: ${blockProduto || 'A combinar com corretor'}\nObservações: ${obs}\nConsentimento para contato: Sim, autorizado conforme LGPD\nOrigem: WhatsApp Web Direct Houses\nStatus: Aguardando contato do corretor`
         : ''),
   };
 
@@ -224,15 +397,17 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
   if (!session) {
     session = {
       jid,
-      phone: senderPhone,
-      name: senderName || 'Cliente',
+      phone: isValidPhoneNumber(senderPhone) ? senderPhone : '',
+      name: senderName && senderName !== 'Cliente' ? senderName : 'Cliente',
+      initialMessage: messageText,
       messages: [],
       extractedLead: {
-        nome: senderName || 'Cliente',
-        telefone: senderPhone,
+        nome: senderName && senderName !== 'Cliente' ? senderName : 'Cliente',
+        telefone: isValidPhoneNumber(senderPhone) ? formatPhoneForDisplay(senderPhone) : '',
         tipoAtendimento: '',
         produtoImovel: '',
         observacoes: '',
+        initialMessage: messageText,
         consentimento: 'Sim, autorizado conforme LGPD',
         origem: 'WhatsApp Web Direct Houses',
         status: 'Em atendimento inicial',
@@ -246,6 +421,18 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
     sessions.set(jid, session);
   }
 
+  // If first message of session wasn't set, set it
+  if (!session.initialMessage) {
+    session.initialMessage = messageText;
+  }
+
+  // Check if this message contains a phone number
+  const detectedPhone = extractPhoneFromText(messageText);
+  if (detectedPhone && isValidPhoneNumber(detectedPhone)) {
+    session.phone = detectedPhone;
+    session.extractedLead.telefone = formatPhoneForDisplay(detectedPhone);
+  }
+
   // Record user message
   session.messages.push({
     id: `msg-${Date.now()}-user`,
@@ -255,35 +442,40 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
   });
   session.lastActivity = new Date().toISOString();
 
-  // Generate AI reply
+  // Generate AI reply with candidate models fallback
   let replyText = '';
   const aiClient = getGeminiClient();
 
   if (aiClient) {
-    try {
-      const systemInstruction = buildSystemPrompt(companyName, senderPhone);
-      const contents = session.messages.map((m) => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }],
-      }));
+    const systemInstruction = buildSystemPrompt(companyName, session.phone, session.initialMessage);
+    const contents = session.messages.map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }));
 
-      const response = await aiClient.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents,
-        config: {
-          systemInstruction,
-          temperature: 0.4,
-          topP: 0.9,
-        },
-      });
-
-      replyText = response.text?.trim() || '';
-    } catch (err) {
-      console.warn('Fallback ativado no WhatsApp AI:', err);
-      replyText = getFallbackReply(session.messages, senderName, senderPhone, companyName);
+    for (const model of CANDIDATE_MODELS) {
+      try {
+        const response = await aiClient.models.generateContent({
+          model,
+          contents,
+          config: {
+            systemInstruction,
+            temperature: 0.3,
+            topP: 0.85,
+          },
+        });
+        if (response && response.text) {
+          replyText = response.text.trim();
+          break;
+        }
+      } catch (err) {
+        console.warn(`Tentativa com modelo ${model} falhou no WhatsApp AI:`, err);
+      }
     }
-  } else {
-    replyText = getFallbackReply(session.messages, senderName, senderPhone, companyName);
+  }
+
+  if (!replyText) {
+    replyText = getFallbackReply(session, companyName);
   }
 
   // Record assistant response

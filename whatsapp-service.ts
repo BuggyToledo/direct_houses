@@ -195,7 +195,25 @@ class WhatsAppService {
 
           if (!messageText.trim()) continue;
 
-          const senderPhone = jid.split('@')[0].replace(/\D/g, '');
+          let senderPhone = '';
+          if (jid.endsWith('@s.whatsapp.net')) {
+            senderPhone = jid.split('@')[0].replace(/\D/g, '');
+          } else {
+            const participant =
+              msg.key.participant ||
+              (msg.key as any).participantPnJid ||
+              (msg.key as any).remoteJidPn ||
+              (msg as any).senderPnJid;
+            if (participant && typeof participant === 'string' && participant.endsWith('@s.whatsapp.net')) {
+              senderPhone = participant.split('@')[0].replace(/\D/g, '');
+            }
+          }
+
+          // If the extracted phone is a 15-digit WhatsApp LID or invalid, clear it
+          if (senderPhone.length >= 15 || (senderPhone.startsWith('192878') && senderPhone.length >= 14) || senderPhone.length < 8) {
+            senderPhone = '';
+          }
+
           const senderName = msg.pushName || 'Cliente';
           const timestamp = Number(msg.messageTimestamp) * 1000 || Date.now();
 

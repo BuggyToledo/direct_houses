@@ -116,10 +116,52 @@ export function saveRoletaConfig(config: Partial<RoletaConfig>): RoletaConfig {
   return updated;
 }
 
+export function isValidPhoneNumber(phone: string): boolean {
+  if (!phone) return false;
+  const digits = phone.replace(/\D/g, '');
+  // Discard WhatsApp Privacy LIDs (15+ digits or starting with 192878...)
+  if (digits.length >= 15) return false;
+  if (digits.startsWith('192878') && digits.length >= 14) return false;
+  return digits.length >= 8 && digits.length <= 14;
+}
+
+export function extractPhoneFromText(text: string): string | null {
+  if (!text) return null;
+  const trimmed = text.trim();
+  
+  // Direct digit check for 10-13 digits
+  const cleanDigits = trimmed.replace(/\D/g, '');
+  if ((cleanDigits.length === 10 || cleanDigits.length === 11) && !cleanDigits.startsWith('192878')) {
+    return cleanPhoneNumber(cleanDigits);
+  }
+  if ((cleanDigits.length === 12 || cleanDigits.length === 13) && cleanDigits.startsWith('55')) {
+    return cleanPhoneNumber(cleanDigits);
+  }
+
+  // Regex check for Brazilian phone patterns inside text
+  const brazilianPhoneRegex = /(?:\+?55\s*)?(?:\(?([1-9][0-9])\)?\s*)?(9[0-9]{4}[-\s]?[0-9]{4}|[2-8][0-9]{3}[-\s]?[0-9]{4}|9[0-9]{3,4}[-\s]?[0-9]{3,4})/g;
+  const match = trimmed.match(brazilianPhoneRegex);
+  if (match && match.length > 0) {
+    for (const m of match) {
+      const cleanM = m.replace(/\D/g, '');
+      if (cleanM.length >= 8 && cleanM.length <= 13 && !cleanM.startsWith('192878')) {
+        return cleanPhoneNumber(cleanM);
+      }
+    }
+  }
+
+  return null;
+}
+
 export function cleanPhoneNumber(phone: string): string {
   if (!phone) return '';
   let digits = phone.replace(/\D/g, '');
   if (!digits) return '';
+
+  // If it is an LID (15+ digits), do not treat as phone
+  if (digits.length >= 15 || (digits.startsWith('192878') && digits.length >= 14)) {
+    return '';
+  }
 
   // If Brazilian number without country code (10 or 11 digits), prepend 55
   if (digits.length === 10 || digits.length === 11) {
@@ -264,7 +306,7 @@ export function formatBrokerLeadMessage(
       `Olá, corretor! Um cliente iniciou contato no WhatsApp da *${companyName}*, mas parou de responder às perguntas do assistente virtual. Para não perdermos o lead, ele foi direcionado imediatamente para você.\n\n` +
       `👤 *Nome:* ${lead.nome || 'Cliente WhatsApp'}\n` +
       `📱 *Telefone:* ${displayPhone || 'Capturado na sessão'}\n` +
-      (lead.initialMessage ? `💬 *Primeira mensagem do cliente:* "${lead.initialMessage}"\n` : '') +
+      (lead.initialMessage ? `💬 *Primeira mensagem / Imóvel:* "${lead.initialMessage}"\n` : '') +
       `⏱️ *Horário:* ${new Date().toLocaleString('pt-BR')}\n` +
       `📌 *Ação sugerida:* Entre em contato diretamente pelo WhatsApp abaixo para dar atendimento humanizado.\n\n` +
       (waLink
@@ -281,6 +323,7 @@ export function formatBrokerLeadMessage(
     `🎯 *Tipo de Atendimento:* ${(lead.tipoAtendimento || 'Interesse Imobiliário').toUpperCase()}\n` +
     `🏢 *Produto / Imóvel:* ${lead.produtoImovel || 'A combinar'}\n` +
     `📝 *Observações:* ${lead.observacoes || 'Nenhuma'}\n` +
+    (lead.initialMessage ? `💬 *Primeira Mensagem / Link do Imóvel:* "${lead.initialMessage}"\n` : '') +
     `🔒 *Consentimento:* Sim, autorizado pelo cliente conforme LGPD\n` +
     `📍 *Origem:* ${lead.origem || 'WhatsApp Web Direct Houses'}\n` +
     `⏱️ *Recebido em:* ${new Date().toLocaleString('pt-BR')}\n\n` +
