@@ -33,6 +33,12 @@ import {
   removeAuthorizedUser,
   GLOBAL_ADMIN_EMAIL,
 } from './auth-service';
+import {
+  getPersistentLeads,
+  recordLead,
+  deletePersistentLead,
+  clearAllPersistentLeads,
+} from './leads-service';
 
 dotenv.config();
 
@@ -944,6 +950,49 @@ app.post('/api/whatsapp/chats/:jid/dispatch', async (req, res) => {
     }
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || 'Erro ao encaminhar sessão' });
+  }
+});
+
+// ==========================================
+// Persistent Leads Management Endpoints
+// ==========================================
+
+// Get all persistent leads
+app.get('/api/leads', (req, res) => {
+  try {
+    res.json(getPersistentLeads());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Save or update lead
+app.post('/api/leads', (req, res) => {
+  try {
+    const lead = recordLead(req.body || {});
+    res.json(lead);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete specific lead
+app.delete('/api/leads/:id', (req, res) => {
+  try {
+    const success = deletePersistentLead(req.params.id);
+    res.json({ success });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clear all leads
+app.delete('/api/leads', (req, res) => {
+  try {
+    const success = clearAllPersistentLeads();
+    res.json({ success });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

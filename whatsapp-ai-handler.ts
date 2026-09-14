@@ -11,6 +11,7 @@ import {
   extractPhoneFromText,
   getBrokers,
 } from './broker-roleta';
+import { recordLead } from './leads-service';
 
 export interface WhatsAppChatSession {
   jid: string;
@@ -383,6 +384,27 @@ function extractLeadFromSession(session: WhatsAppChatSession) {
   if (isFinished && session.status === 'active') {
     session.status = 'qualified';
   }
+
+  // Persist lead to .data/leads.json
+  if (isFinished || session.messages.length >= 2 || session.phone) {
+    recordLead({
+      id: `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`,
+      nome: finalName,
+      telefone: finalPhone,
+      tipoAtendimento: tipo || 'Comprar',
+      produtoImovel: blockProduto || 'A combinar',
+      observacoes: obs,
+      initialMessage: session.initialMessage,
+      origem: 'WhatsApp Web Direct Houses',
+      status: isFinished
+        ? session.assignedBroker
+          ? 'Direcionado na Roleta'
+          : 'Qualificado'
+        : 'Em Atendimento',
+      assignedBroker: session.assignedBroker,
+      rawStructuredText: finalStructuredText,
+    });
+  }
 }
 
 /**
@@ -543,6 +565,22 @@ export async function dispatchSessionLeadToRoleta(
     }
 
     console.log(`🎯 [Roleta] Lead de ${session.extractedLead.nome} (${session.phone}) encaminhado para ${chosenBroker.name} (${chosenBroker.phone})`);
+    
+    // Update persistent lead
+    recordLead({
+      id: `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`,
+      nome: session.extractedLead.nome,
+      telefone: session.extractedLead.telefone || session.phone,
+      tipoAtendimento: session.extractedLead.tipoAtendimento,
+      produtoImovel: session.extractedLead.produtoImovel,
+      observacoes: session.extractedLead.observacoes,
+      initialMessage: session.initialMessage,
+      origem: 'WhatsApp Web Direct Houses',
+      status: 'Direcionado na Roleta',
+      assignedBroker: session.assignedBroker,
+      rawStructuredText: session.extractedLead.finalStructuredText,
+    });
+
     return {
       success: true,
       message: `Lead encaminhado com sucesso para o corretor ${chosenBroker.name}.`,
@@ -593,6 +631,21 @@ export async function dispatchSessionLeadToSpecificBroker(
 
     const clientNotice = formatClientAssignedMessage(chosenBroker.name, companyName);
     await whatsAppService.sendTextMessage(session.jid, clientNotice);
+
+    // Update persistent lead
+    recordLead({
+      id: `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`,
+      nome: session.extractedLead.nome,
+      telefone: session.extractedLead.telefone || session.phone,
+      tipoAtendimento: session.extractedLead.tipoAtendimento,
+      produtoImovel: session.extractedLead.produtoImovel,
+      observacoes: session.extractedLead.observacoes,
+      initialMessage: session.initialMessage,
+      origem: 'WhatsApp Web Direct Houses',
+      status: 'Direcionado na Roleta',
+      assignedBroker: session.assignedBroker,
+      rawStructuredText: session.extractedLead.finalStructuredText,
+    });
 
     return {
       success: true,
@@ -664,6 +717,20 @@ async function checkInactiveSessions() {
             phone: chosenBroker.phone,
             assignedAt: new Date().toISOString(),
           };
+
+          // Update persistent lead
+          recordLead({
+            id: `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`,
+            nome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
+            telefone: session.extractedLead.telefone || session.phone,
+            tipoAtendimento: session.extractedLead.tipoAtendimento || 'Interesse Comercial Inicial',
+            produtoImovel: session.extractedLead.produtoImovel || 'A combinar com corretor',
+            observacoes: 'Cliente parou de responder após 5 minutos. Lead recuperado e direcionado na roleta.',
+            initialMessage: session.initialMessage || session.messages[0]?.content || '',
+            origem: 'WhatsApp Web Direct Houses',
+            status: 'Recuperado por Inatividade',
+            assignedBroker: session.assignedBroker,
+          });
 
           console.log(`✅ [Inatividade] Lead recuperado e enviado com sucesso para ${chosenBroker.name} (${chosenBroker.phone})`);
         }
