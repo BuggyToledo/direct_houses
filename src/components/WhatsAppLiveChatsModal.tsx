@@ -42,7 +42,7 @@ export function WhatsAppLiveChatsModal({
         fetch('/api/whatsapp/chats'),
         fetch('/api/brokers'),
       ]);
-      if (chatsRes.ok) {
+      if (chatsRes.ok && chatsRes.headers.get('content-type')?.includes('application/json')) {
         const data = await chatsRes.json();
         setSessions(data);
         if (data.length > 0 && !selectedSession) {
@@ -52,11 +52,11 @@ export function WhatsAppLiveChatsModal({
           if (updated) setSelectedSession(updated);
         }
       }
-      if (brokersRes.ok) {
+      if (brokersRes.ok && brokersRes.headers.get('content-type')?.includes('application/json')) {
         setBrokers(await brokersRes.json());
       }
     } catch (err) {
-      console.error('Erro ao carregar atendimentos do WhatsApp:', err);
+      console.warn('Aviso transitório ao carregar atendimentos do WhatsApp:', err);
     } finally {
       setLoading(false);
     }

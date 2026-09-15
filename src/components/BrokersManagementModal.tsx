@@ -56,10 +56,14 @@ export function BrokersManagementModal({
         fetch('/api/brokers'),
         fetch('/api/roleta/config'),
       ]);
-      if (bRes.ok) setBrokers(await bRes.json());
-      if (cRes.ok) setConfig(await cRes.json());
+      if (bRes.ok && bRes.headers.get('content-type')?.includes('application/json')) {
+        setBrokers(await bRes.json());
+      }
+      if (cRes.ok && cRes.headers.get('content-type')?.includes('application/json')) {
+        setConfig(await cRes.json());
+      }
     } catch (err) {
-      console.error('Erro ao carregar corretores:', err);
+      console.warn('Aviso transitório ao carregar corretores:', err);
     } finally {
       setLoading(false);
     }

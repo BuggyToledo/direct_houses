@@ -137,26 +137,27 @@ export default function App() {
   const fetchPersistentLeads = useCallback(async () => {
     try {
       const res = await fetch('/api/leads');
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
         setPersistentLeads(data);
       }
-    } catch (err) {
-      console.error('Erro ao buscar leads gravados:', err);
+    } catch {
+      // Ignorar erros transitórios de rede em polling de segundo plano
     }
   }, []);
 
   // Fetch brokers
-  // Fetch brokers
   const fetchBrokers = useCallback(async () => {
     try {
       const res = await fetch('/api/brokers');
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
         setBrokers(data);
       }
-    } catch (err) {
-      console.error('Erro ao buscar corretores:', err);
+    } catch {
+      // Ignorar erros transitórios de rede em polling de segundo plano
     }
   }, []);
 
@@ -164,12 +165,13 @@ export default function App() {
   const fetchLancamentos = useCallback(async () => {
     try {
       const res = await fetch('/api/lancamentos');
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
         setLancamentos(data);
       }
-    } catch (err) {
-      console.error('Erro ao buscar lançamentos:', err);
+    } catch {
+      // Ignorar erros transitórios de rede em polling de segundo plano
     }
   }, []);
 

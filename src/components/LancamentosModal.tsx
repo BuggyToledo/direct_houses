@@ -206,12 +206,13 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
     setLoading(true);
     try {
       const res = await fetch('/api/lancamentos');
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
         setLancamentos(data);
       }
     } catch (err) {
-      console.error('Erro ao buscar lançamentos:', err);
+      console.warn('Aviso transitório ao buscar lançamentos:', err);
     } finally {
       setLoading(false);
     }

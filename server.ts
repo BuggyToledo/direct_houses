@@ -1289,6 +1289,11 @@ app.post('/api/roleta/test-dispatch', async (req, res) => {
   }
 });
 
+// Fallback for unmatched API routes - ALWAYS return JSON 404, never fallback to SPA HTML
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: 'Endpoint não encontrado', path: req.path });
+});
+
 // Vite middleware setup
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
