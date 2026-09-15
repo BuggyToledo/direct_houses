@@ -291,6 +291,9 @@ export function formatBrokerLeadMessage(
     origem?: string;
     isTimeoutRecovery?: boolean;
     initialMessage?: string;
+    trilhaNavegacao?: string[];
+    resumoNavegacao?: string;
+    historicoMensagens?: Array<{ role: string; content: string; timestamp: string }>;
   },
   companyName: string = 'Direct Houses',
   clientPhone?: string
@@ -300,6 +303,24 @@ export function formatBrokerLeadMessage(
   const displayPhone = formatPhoneForDisplay(phone);
   const waLink = cleanPhone ? `https://wa.me/${cleanPhone}` : '';
 
+  // Formatar trilha de navegação se existir
+  let trilhaText = '';
+  if (lead.trilhaNavegacao && lead.trilhaNavegacao.length > 0) {
+    trilhaText = `🧭 *TRILHA DE NAVEGAÇÃO DO CLIENTE:*\n${lead.trilhaNavegacao.map((t) => `• ${t}`).join('\n')}\n\n`;
+  } else if (lead.resumoNavegacao) {
+    trilhaText = `🧭 *RESUMO DA NAVEGAÇÃO:*\n${lead.resumoNavegacao}\n\n`;
+  }
+
+  // Formatar histórico de mensagens trocadas se existir
+  let chatHistoryText = '';
+  if (lead.historicoMensagens && lead.historicoMensagens.length > 0) {
+    chatHistoryText = `💬 *TRANSCRIÇÃO COMPLETA DA CONVERSA:*\n` +
+      lead.historicoMensagens
+        .map((m) => `${m.role === 'user' ? '👤 Cliente' : '🤖 IA'}: ${m.content}`)
+        .join('\n\n') +
+      `\n\n`;
+  }
+
   if (lead.isTimeoutRecovery) {
     return (
       `⚠️ *LEAD CAPTURADO POR INATIVIDADE (5 MIN SEM RESPOSTA)*\n\n` +
@@ -307,6 +328,8 @@ export function formatBrokerLeadMessage(
       `👤 *Nome:* ${lead.nome || 'Cliente WhatsApp'}\n` +
       `📱 *Telefone:* ${displayPhone || 'Capturado na sessão'}\n` +
       (lead.initialMessage ? `💬 *Primeira mensagem / Imóvel:* "${lead.initialMessage}"\n` : '') +
+      trilhaText +
+      chatHistoryText +
       `⏱️ *Horário:* ${new Date().toLocaleString('pt-BR')}\n` +
       `📌 *Ação sugerida:* Entre em contato diretamente pelo WhatsApp abaixo para dar atendimento humanizado.\n\n` +
       (waLink
@@ -322,8 +345,10 @@ export function formatBrokerLeadMessage(
     `📱 *Telefone:* ${displayPhone || lead.telefone || phone || 'Não informado'}\n` +
     `🎯 *Tipo de Atendimento:* ${(lead.tipoAtendimento || 'Interesse Imobiliário').toUpperCase()}\n` +
     `🏢 *Produto / Imóvel:* ${lead.produtoImovel || 'A combinar'}\n` +
-    `📝 *Observações:* ${lead.observacoes || 'Nenhuma'}\n` +
-    (lead.initialMessage ? `💬 *Primeira Mensagem / Link do Imóvel:* "${lead.initialMessage}"\n` : '') +
+    trilhaText +
+    chatHistoryText +
+    `📝 *Observações Finais:* ${lead.observacoes || 'Nenhuma'}\n` +
+    (lead.initialMessage ? `💬 *Origem / Link:* "${lead.initialMessage}"\n` : '') +
     `🔒 *Consentimento:* Sim, autorizado pelo cliente conforme LGPD\n` +
     `📍 *Origem:* ${lead.origem || 'WhatsApp Web Direct Houses'}\n` +
     `⏱️ *Recebido em:* ${new Date().toLocaleString('pt-BR')}\n\n` +

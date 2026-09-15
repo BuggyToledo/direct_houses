@@ -20,6 +20,13 @@ export interface PersistentLead {
     assignedAt?: string;
   };
   rawStructuredText?: string;
+  trilhaNavegacao?: string[];
+  resumoNavegacao?: string;
+  historicoMensagens?: Array<{
+    role: string;
+    content: string;
+    timestamp: string;
+  }>;
 }
 
 const DATA_DIR = path.join(process.cwd(), '.data');
@@ -84,6 +91,10 @@ export function recordLead(leadData: Partial<PersistentLead>): PersistentLead {
       initialMessage: leadData.initialMessage || current.initialMessage,
       status: leadData.status || current.status,
       assignedBroker: leadData.assignedBroker || current.assignedBroker,
+      rawStructuredText: leadData.rawStructuredText || current.rawStructuredText,
+      trilhaNavegacao: leadData.trilhaNavegacao || current.trilhaNavegacao,
+      resumoNavegacao: leadData.resumoNavegacao || current.resumoNavegacao,
+      historicoMensagens: leadData.historicoMensagens || current.historicoMensagens,
       updatedAt: now,
     };
     leads[existingIndex] = savedLead;
@@ -102,6 +113,9 @@ export function recordLead(leadData: Partial<PersistentLead>): PersistentLead {
       createdAt: leadData.createdAt || now,
       assignedBroker: leadData.assignedBroker,
       rawStructuredText: leadData.rawStructuredText || '',
+      trilhaNavegacao: leadData.trilhaNavegacao || [],
+      resumoNavegacao: leadData.resumoNavegacao || '',
+      historicoMensagens: leadData.historicoMensagens || [],
     };
     leads.unshift(savedLead);
   }

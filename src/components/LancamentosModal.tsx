@@ -59,6 +59,10 @@ export interface WhitelistPublicacao {
   precoFaixa: boolean;
   condicoesComerciais: boolean;
   urlPublicaDirectHouse: boolean;
+  fotos?: boolean;
+  descricao?: boolean;
+  localidade?: boolean;
+  vizinhanca?: boolean;
   enderecoCompleto: false;
   telefoneConstrutora: false;
   emailConstrutora: false;
@@ -98,6 +102,11 @@ export interface LancamentoItem {
   condicoesComerciais?: string;
   diferenciais?: string;
   previsaoEntrega?: string;
+  // Sub-Menu Fields
+  descricao?: string;
+  fotos?: string;
+  localidade?: string;
+  vizinhanca?: string;
   // Nível 3 - Dados Internos
   construtora?: string;
   telefoneConstrutora?: string;
@@ -144,6 +153,10 @@ const DEFAULT_WHITELIST: WhitelistPublicacao = {
   precoFaixa: true,
   condicoesComerciais: true,
   urlPublicaDirectHouse: true,
+  fotos: true,
+  descricao: true,
+  localidade: true,
+  vizinhanca: true,
   enderecoCompleto: false,
   telefoneConstrutora: false,
   emailConstrutora: false,
@@ -176,6 +189,12 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
   const [previsaoEntrega, setPrevisaoEntrega] = useState('');
   const [urlPublicaDirectHouse, setUrlPublicaDirectHouse] = useState('');
   const [conteudoPublicoAutorizado, setConteudoPublicoAutorizado] = useState('');
+
+  // Sub-Menu Form State
+  const [descricao, setDescricao] = useState('');
+  const [fotos, setFotos] = useState('');
+  const [localidade, setLocalidade] = useState('');
+  const [vizinhanca, setVizinhanca] = useState('');
 
   // Nível 3 Internos
   const [construtora, setConstrutora] = useState('');
@@ -241,6 +260,10 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
     setPrevisaoEntrega('');
     setUrlPublicaDirectHouse('');
     setConteudoPublicoAutorizado('');
+    setDescricao('');
+    setFotos('');
+    setLocalidade('');
+    setVizinhanca('');
     setConstrutora('');
     setTelefoneConstrutora('');
     setEmailConstrutora('');
@@ -269,6 +292,10 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
     setPrevisaoEntrega(item.previsaoEntrega || '');
     setUrlPublicaDirectHouse(item.urlPublicaDirectHouse || '');
     setConteudoPublicoAutorizado(item.conteudoPublicoAutorizado || '');
+    setDescricao(item.descricao || '');
+    setFotos(item.fotos || '');
+    setLocalidade(item.localidade || '');
+    setVizinhanca(item.vizinhanca || '');
     setConstrutora(item.construtora || '');
     setTelefoneConstrutora(item.telefoneConstrutora || '');
     setEmailConstrutora(item.emailConstrutora || '');
@@ -304,6 +331,11 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
       previsaoEntrega,
       urlPublicaDirectHouse,
       conteudoPublicoAutorizado,
+      // Sub-Menu
+      descricao,
+      fotos,
+      localidade,
+      vizinhanca,
       // Nível 3 Interno
       construtora,
       telefoneConstrutora,
@@ -1160,6 +1192,110 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
                       placeholder="Ex: Entrada facilitada durante as obras em até 36x"
                       className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
                     />
+                  </div>
+                </div>
+
+                {/* SUB-MENU DO WHATSAPP: Fotos, Descrição, Localidade, Vizinhança */}
+                <div className="pt-3 border-t border-slate-100 space-y-3">
+                  <h6 className="font-bold text-xs text-indigo-900 flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-indigo-600" />
+                    Sub-Menu Interativo do WhatsApp (Fotos, Descrição, Localidade, Vizinhança)
+                  </h6>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-slate-700">📸 1. Fotos / Galeria / Tour Virtual</label>
+                        <label className="flex items-center gap-1 text-[11px] text-slate-600 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={whitelist.fotos}
+                            onChange={(e) => setWhitelist({ ...whitelist, fotos: e.target.checked })}
+                            className="rounded text-indigo-600"
+                          />
+                          Publicável
+                        </label>
+                      </div>
+                      <input
+                        id="form-fotos-input"
+                        type="text"
+                        value={fotos}
+                        onChange={(e) => setFotos(e.target.value)}
+                        placeholder="Ex: https://directhouse.com.br/fotos/reserva-1.jpg, https://directhouse.com.br/fotos/reserva-2.jpg"
+                        className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-slate-700">📍 3. Localidade & Referências Públicas</label>
+                        <label className="flex items-center gap-1 text-[11px] text-slate-600 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={whitelist.localidade}
+                            onChange={(e) => setWhitelist({ ...whitelist, localidade: e.target.checked })}
+                            className="rounded text-indigo-600"
+                          />
+                          Publicável
+                        </label>
+                      </div>
+                      <input
+                        id="form-localidade-input"
+                        type="text"
+                        value={localidade}
+                        onChange={(e) => setLocalidade(e.target.value)}
+                        placeholder="Ex: Próximo ao Bosque da Barra, VillageMall e estação BRT"
+                        className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-slate-700">📝 2. Descrição & Conceito do Projeto</label>
+                        <label className="flex items-center gap-1 text-[11px] text-slate-600 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={whitelist.descricao}
+                            onChange={(e) => setWhitelist({ ...whitelist, descricao: e.target.checked })}
+                            className="rounded text-indigo-600"
+                          />
+                          Publicável
+                        </label>
+                      </div>
+                      <textarea
+                        id="form-descricao-input"
+                        rows={3}
+                        value={descricao}
+                        onChange={(e) => setDescricao(e.target.value)}
+                        placeholder="Ex: Projeto residencial sofisticado com lazer completo tipo resort, plantas inteligentes e acabamento premium..."
+                        className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-slate-700">🌳 4. Vizinhança & Conveniências ao Redor</label>
+                        <label className="flex items-center gap-1 text-[11px] text-slate-600 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={whitelist.vizinhanca}
+                            onChange={(e) => setWhitelist({ ...whitelist, vizinhanca: e.target.checked })}
+                            className="rounded text-indigo-600"
+                          />
+                          Publicável
+                        </label>
+                      </div>
+                      <textarea
+                        id="form-vizinhanca-input"
+                        rows={3}
+                        value={vizinhanca}
+                        onChange={(e) => setVizinhanca(e.target.value)}
+                        placeholder="Ex: Próximo aos melhores colégios bilíngues, supermercados Zona Sul, polo gastronômico e a 7 min da praia..."
+                        className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

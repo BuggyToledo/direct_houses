@@ -21,6 +21,10 @@ import {
   Sparkles,
   Users,
   ExternalLink,
+  Compass,
+  MessageSquare,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { LeadData, AutomationStatus, Broker } from '../types';
 
@@ -55,6 +59,7 @@ export function BrokerLeadCard({
   onOpenBrokersModal,
 }: BrokerLeadCardProps) {
   const [copied, setCopied] = useState(false);
+  const [showFullHistory, setShowFullHistory] = useState(false);
   const [brokersList, setBrokersList] = useState<Broker[]>([]);
   const [selectedBrokerId, setSelectedBrokerId] = useState('');
   const [isDispatchingRoleta, setIsDispatchingRoleta] = useState(false);
@@ -236,6 +241,69 @@ export function BrokerLeadCard({
             );
           })}
         </div>
+
+        {/* Trilha de Navegação do Cliente */}
+        {((lead.trilhaNavegacao && lead.trilhaNavegacao.length > 0) || lead.resumoNavegacao) && (
+          <div className="p-3 rounded-xl bg-indigo-50/70 border border-indigo-200 text-xs space-y-1.5">
+            <div className="flex items-center gap-1.5 font-bold text-indigo-900">
+              <Compass className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Trilha de Navegação do Cliente</span>
+            </div>
+            {lead.trilhaNavegacao && lead.trilhaNavegacao.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {lead.trilhaNavegacao.map((item, idx) => (
+                  <span
+                    key={idx}
+                    className="inline-flex items-center px-2 py-0.5 rounded-md bg-white border border-indigo-200 text-[11px] font-medium text-indigo-900 shadow-2xs"
+                  >
+                    {idx + 1}. {item}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[11px] text-indigo-800 leading-relaxed">
+                {lead.resumoNavegacao}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Histórico Completo de Mensagens / Transcrição */}
+        {lead.historicoMensagens && lead.historicoMensagens.length > 0 && (
+          <div className="rounded-xl border border-slate-200 overflow-hidden text-xs bg-slate-50/60">
+            <button
+              type="button"
+              onClick={() => setShowFullHistory(!showFullHistory)}
+              className="w-full px-3 py-2 flex items-center justify-between font-bold text-slate-700 hover:bg-slate-100/80 transition-colors cursor-pointer"
+            >
+              <span className="flex items-center gap-1.5">
+                <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
+                Histórico Completo da Conversa ({lead.historicoMensagens.length} mensagens)
+              </span>
+              {showFullHistory ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+            </button>
+            {showFullHistory && (
+              <div className="p-3 border-t border-slate-200 space-y-2 max-h-60 overflow-y-auto bg-white">
+                {lead.historicoMensagens.map((msg, idx) => (
+                  <div
+                    key={idx}
+                    className={`p-2 rounded-lg text-[11px] ${
+                      msg.role === 'user'
+                        ? 'bg-blue-50 text-blue-900 border border-blue-100 ml-4'
+                        : 'bg-slate-50 text-slate-800 border border-slate-100 mr-4'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between font-semibold mb-0.5 text-[10px] text-slate-500">
+                      <span>{msg.role === 'user' ? '👤 Cliente' : '🤖 IA Direct Houses'}</span>
+                      {msg.timestamp && <span>{msg.timestamp}</span>}
+                    </div>
+                    <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* LGPD Consent Badge */}
         <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">

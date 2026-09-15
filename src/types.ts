@@ -25,6 +25,9 @@ export interface LeadData {
   confirmed: boolean;
   humanRequested: boolean;
   finalStructuredText: string;
+  trilhaNavegacao?: string[];
+  resumoNavegacao?: string;
+  historicoMensagens?: Array<{ role: string; content: string; timestamp: string }>;
 }
 
 export interface AutomationStatus {

@@ -28,6 +28,10 @@ export interface WhitelistPublicacao {
   precoFaixa: boolean;
   condicoesComerciais: boolean;
   urlPublicaDirectHouse: boolean;
+  fotos?: boolean;
+  descricao?: boolean;
+  localidade?: boolean;
+  vizinhanca?: boolean;
 
   // NÍVEL 3 - NUNCA PUBLICÁVEIS (Regra de governança absoluta de sistema)
   enderecoCompleto: false;
@@ -65,7 +69,7 @@ export interface Lancamento {
   conteudoPublicoAutorizado?: string; // Texto editorial oficial aprovado pela Direct House
 
   // ============================================================
-  // NÍVEL 2 — Dados comerciais autorizados
+  // NÍVEL 2 — Dados comerciais autorizados & Submenu do Empreendimento
   // ============================================================
   nome: string;
   bairro: string; // Ex: "Barra da Tijuca", "Copacabana" (Apenas localização pública autorizada)
@@ -77,6 +81,12 @@ export interface Lancamento {
   condicoesComerciais?: string; // Ex: "Entrada parcelada em 36x, financiamento Caixa ou bancário"
   diferenciais?: string; // Ex: "Varanda gourmet, 1 vaga, lazer completo tipo resort, piscina e academia"
   previsaoEntrega?: string; // Ex: "Dezembro/2027"
+
+  // Submenu interativo para IA / WhatsApp:
+  descricao?: string; // Apresentação detalhada e conceito do projeto
+  fotos?: string; // Links de fotos, galeria de imagens ou tour virtual
+  localidade?: string; // Pontos de referência públicos e localização geral (sem número de lote)
+  vizinhanca?: string; // Vizinhança, conveniências, comércio, escolas, praias e acessos ao redor
 
   // ============================================================
   // NÍVEL 3 — Fontes internas de apoio (NÃO PUBLICÁVEIS PELA IA)
@@ -119,6 +129,10 @@ const DEFAULT_WHITELIST: WhitelistPublicacao = {
   precoFaixa: true,
   condicoesComerciais: true,
   urlPublicaDirectHouse: true,
+  fotos: true,
+  descricao: true,
+  localidade: true,
+  vizinhanca: true,
   enderecoCompleto: false,
   telefoneConstrutora: false,
   emailConstrutora: false,
@@ -145,6 +159,10 @@ const DEFAULT_LANCAMENTOS: Lancamento[] = [
     condicoesComerciais: 'Entrada facilitada em 36 meses durante obras',
     diferenciais: 'Varanda gourmet, 1 vaga de garagem, lazer completo tipo resort, piscina semiolímpica e academia equipada',
     previsaoEntrega: 'Novembro de 2027',
+    descricao: 'O Reserva Jardim Barra foi projetado para quem busca qualidade de vida, sofisticação e contato com o verde. Um projeto moderno com plantas inteligentes, varandas com vista livre e infraestrutura de clube privativo.',
+    fotos: 'https://directhouse.com.br/fotos/reserva-jardim-1.jpg, https://directhouse.com.br/fotos/reserva-jardim-2.jpg',
+    localidade: 'Região nobre da Barra da Tijuca, próximo ao Bosque da Barra, Shopping VillageMall e principais vias de acesso.',
+    vizinhanca: 'Próximo aos melhores colégios bilíngues, supermercados gourmet Zona Sul e Pão de Açúcar, hospitais de excelência e a 7 minutos da praia.',
     // Dados internos (Nível 3 - Nunca publicáveis)
     construtora: 'Incorporadora Jardim Sul S/A',
     telefoneConstrutora: '(21) 3344-9900',
@@ -189,6 +207,10 @@ const DEFAULT_LANCAMENTOS: Lancamento[] = [
     condicoesComerciais: 'Unidades com rentabilidade estimada de 0,8% a.m. para locação short stay',
     diferenciais: 'Ideal para moradia ou Airbnb, rooftop com vista para o Cristo, espaço coworking e lavanderia coletiva OMO',
     previsaoEntrega: 'Agosto de 2026',
+    descricao: 'Studios inteligentes de design na Zona Sul com rooftop panorâmico voltado para o Cristo Redentor. Projeto inovador de alta rentabilidade.',
+    fotos: 'https://directhouse.com.br/fotos/iconic-studios-1.jpg, https://directhouse.com.br/fotos/iconic-studios-2.jpg',
+    localidade: 'Bairro nobre de Botafogo, Zona Sul do Rio de Janeiro, a poucos metros do Metrô Botafogo e Botafogo Praia Shopping.',
+    vizinhanca: 'Polo gastronômico de Botafogo, fácil acesso a Copacabana, Flamengo e Centro. Região vibrante repleta de bares, restaurantes e centros culturais.',
     // Dados internos (Nível 3 - Nunca publicáveis)
     construtora: 'Design Rio Incorporações Ltda',
     telefoneConstrutora: '(21) 2555-1234',
@@ -246,6 +268,10 @@ function normalizeLancamento(raw: any): Lancamento {
     precoFaixa: raw.publicavel?.precoFaixa !== false,
     condicoesComerciais: raw.publicavel?.condicoesComerciais !== false,
     urlPublicaDirectHouse: raw.publicavel?.urlPublicaDirectHouse !== false,
+    fotos: raw.publicavel?.fotos !== false,
+    descricao: raw.publicavel?.descricao !== false,
+    localidade: raw.publicavel?.localidade !== false,
+    vizinhanca: raw.publicavel?.vizinhanca !== false,
     // SISTEMA: Travados como false independente de qualquer payload
     enderecoCompleto: false,
     telefoneConstrutora: false,
@@ -287,6 +313,10 @@ function normalizeLancamento(raw: any): Lancamento {
     condicoesComerciais: raw.condicoesComerciais ? String(raw.condicoesComerciais).trim() : '',
     diferenciais: raw.diferenciais ? String(raw.diferenciais).trim() : '',
     previsaoEntrega: raw.previsaoEntrega ? String(raw.previsaoEntrega).trim() : '',
+    descricao: raw.descricao ? String(raw.descricao).trim() : '',
+    fotos: raw.fotos ? String(raw.fotos).trim() : '',
+    localidade: raw.localidade ? String(raw.localidade).trim() : '',
+    vizinhanca: raw.vizinhanca ? String(raw.vizinhanca).trim() : '',
     // Dados Nível 3 Internos
     construtora: raw.construtora ? String(raw.construtora).trim() : '',
     telefoneConstrutora: raw.telefoneConstrutora ? String(raw.telefoneConstrutora).trim() : '',
@@ -360,6 +390,10 @@ export function getPublicLancamentosForAI(): Array<{
   previsaoEntrega?: string;
   urlPublicaDirectHouse?: string;
   conteudoPublicoAutorizado?: string;
+  descricao?: string;
+  fotos?: string;
+  localidade?: string;
+  vizinhanca?: string;
 }> {
   const activeItems = getActiveLancamentos();
 
@@ -383,6 +417,10 @@ export function getPublicLancamentosForAI(): Array<{
     if (l.conteudoPublicoAutorizado) {
       item.conteudoPublicoAutorizado = l.conteudoPublicoAutorizado;
     }
+    if (l.publicavel.descricao && l.descricao) item.descricao = l.descricao;
+    if (l.publicavel.fotos && l.fotos) item.fotos = l.fotos;
+    if (l.publicavel.localidade && l.localidade) item.localidade = l.localidade;
+    if (l.publicavel.vizinhanca && l.vizinhanca) item.vizinhanca = l.vizinhanca;
 
     // NENHUM DADO NÍVEL 3 (Endereço completo, telefone de construtora, email, book bruto)
     // é incluído na base pública.
@@ -403,6 +441,7 @@ export function formatLancamentosForPrompt(): string {
   return publicList
     .map((l, idx) => {
       let block = `🏢 [EMPREENDIMENTO ${idx + 1} - PUBLICÁVEL PELA DIRECT HOUSE]:
+• ID: ${l.id}
 • Nome: ${l.nome}
 • Localização autorizada: ${l.bairroRegiao}
 • Tipologias: ${l.tipologias || 'Consulte nosso corretor'}
@@ -411,6 +450,10 @@ ${l.metragens ? `• Metragens aprovadas: ${l.metragens}\n` : ''}${l.quartos ? `
       }${l.condicoesComerciais ? `• Condições comerciais: ${l.condicoesComerciais}\n` : ''}${
         l.diferenciais ? `• Diferenciais e Lazer: ${l.diferenciais}\n` : ''
       }${l.previsaoEntrega ? `• Previsão de entrega: ${l.previsaoEntrega}\n` : ''}${
+        l.descricao ? `• Descrição/Apresentação: ${l.descricao}\n` : ''
+      }${l.fotos ? `• Fotos/Galeria: ${l.fotos}\n` : ''}${
+        l.localidade ? `• Localidade e Referências: ${l.localidade}\n` : ''
+      }${l.vizinhanca ? `• Vizinhança e Conveniências: ${l.vizinhanca}\n` : ''}${
         l.urlPublicaDirectHouse ? `• Link oficial no site da Direct House: ${l.urlPublicaDirectHouse}\n` : ''
       }${l.conteudoPublicoAutorizado ? `• Informações públicas autorizadas: ${l.conteudoPublicoAutorizado}\n` : ''}`;
 
