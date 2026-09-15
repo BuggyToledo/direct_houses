@@ -30,6 +30,10 @@ const makeCacheableSignalKeyStore: any =
   (BaileysModule as any).makeCacheableSignalKeyStore ||
   (BaileysModule as any).default?.makeCacheableSignalKeyStore;
 
+const Browsers: any =
+  (BaileysModule as any).Browsers ||
+  (BaileysModule as any).default?.Browsers;
+
 export type WhatsAppState = 'disconnected' | 'connecting' | 'qr_ready' | 'connected';
 
 export interface WhatsAppStatus {
@@ -106,6 +110,11 @@ class WhatsAppService {
       this.isConnecting = false;
     }
 
+    if (force && this.state !== 'connected') {
+      // User explicitly requested a fresh QR code session
+      this.clearAuthDir();
+    }
+
     if (!force && this.isConnecting) {
       return this.getStatus();
     }
@@ -147,11 +156,12 @@ class WhatsAppService {
       const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1015901307] as any }));
 
       const logger = pino({ level: 'silent' });
+      const browserConfig = Browsers?.ubuntu ? Browsers.ubuntu('Chrome') : ['Ubuntu', 'Chrome', '22.04.4'];
 
       this.sock = makeWASocket({
         version,
         logger,
-        browser: ['Direct Houses', 'Chrome', '1.0.0'],
+        browser: browserConfig,
         auth: {
           creds: authState.creds,
           keys: makeCacheableSignalKeyStore(authState.keys, logger),
@@ -215,7 +225,14 @@ class WhatsAppService {
 
           console.log(`🔌 [WhatsApp] Conexão fechada. Motivo: ${statusCode}. Reconectar: ${shouldReconnect}`);
 
-          if (statusCode === DisconnectReason.loggedOut) {
+          if (statusCode === 515) {
+            console.log('🔄 [WhatsApp] Status 515 (Restart Required). Reconectando imediatamente...');
+            this.reconnectAttempts = 0;
+            setTimeout(() => this.connect(false), 1200);
+            return;
+          }
+
+          if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403) {
             this.state = 'disconnected';
             this.connectedPhone = null;
             this.connectedName = null;

@@ -930,7 +930,7 @@ app.post('/api/whatsapp/disconnect', async (req, res) => {
 });
 
 // Send test message via WhatsApp
-app.post('/api/whatsapp/send-test', async (req, res) => {
+app.post(['/api/whatsapp/send-test', '/api/whatsapp/test-send'], async (req, res) => {
   try {
     const { phone, message } = req.body || {};
     if (!phone) {

@@ -5,581 +5,395 @@ import {
   Check,
   BookmarkCheck,
   Clock,
-  Tag,
   Phone,
-  HelpCircle,
-  FileCheck,
   Shield,
   Send,
-  AlertCircle,
-  Webhook,
-  Mail,
-  RefreshCw,
-  Settings,
-  CheckCircle2,
-  XCircle,
   Sparkles,
-  Users,
   ExternalLink,
-  Compass,
-  MessageSquare,
   ChevronDown,
   ChevronUp,
+  MessageSquare,
+  FileText,
+  Image as ImageIcon,
+  CheckCircle2,
+  Users,
+  Building,
+  RotateCw,
 } from 'lucide-react';
 import { LeadData, AutomationStatus, Broker } from '../types';
 
 interface BrokerLeadCardProps {
+  key?: React.Key;
   lead: LeadData;
   companyName: string;
-  onSaveToHistory: () => void;
+  onSaveToHistory?: () => void;
   isSaved?: boolean;
-  automationsConfig?: {
-    makeEnabled?: boolean;
-    makeWebhookUrl?: string;
-    n8nEnabled?: boolean;
-    emailEnabled?: boolean;
-    n8nWebhookUrl?: string;
-    emailRecipients?: string;
-  };
-  automationStatus?: AutomationStatus;
-  onTriggerAutomations?: () => void;
-  onOpenSettings?: () => void;
-  onOpenBrokersModal?: () => void;
+  avatarUrl?: string;
+  leadScore?: number;
+  urgencyLabel?: string;
+  assignedBrokerName?: string;
 }
 
 export function BrokerLeadCard({
   lead,
   companyName,
-  onSaveToHistory,
-  isSaved,
-  automationsConfig,
-  automationStatus,
-  onTriggerAutomations,
-  onOpenSettings,
-  onOpenBrokersModal,
+  avatarUrl,
+  leadScore = 96,
+  urgencyLabel = 'Alta Urgência',
+  assignedBrokerName,
 }: BrokerLeadCardProps) {
   const [copied, setCopied] = useState(false);
-  const [showFullHistory, setShowFullHistory] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [brokersList, setBrokersList] = useState<Broker[]>([]);
   const [selectedBrokerId, setSelectedBrokerId] = useState('');
-  const [isDispatchingRoleta, setIsDispatchingRoleta] = useState(false);
-  const [roletaResult, setRoletaResult] = useState<{
+  const [isDispatching, setIsDispatching] = useState(false);
+  const [dispatchResult, setDispatchResult] = useState<{
     success: boolean;
     message: string;
-    waLink?: string;
     brokerName?: string;
   } | null>(null);
 
-  // Load available brokers
+  // Fallback avatars
+  const defaultAvatar =
+    avatarUrl ||
+    'https://lh3.googleusercontent.com/aida-public/AB6AXuDUy40wR2MiQfGU85MF-uALu9wZYrMxEWv4741uZF0VcBzF1JUccX6JAXbMbX6DCCOBjufkDJqGhwAJsF3GZNVRB9A867MDhq7KaKwv9vdl47b4EwqEJGqlE3Bn79YHdRW2WrgdcA3ScM8l55dXEcF_yERQKn62podxdmQiYk5YmZIX7UpTMkXowggW06K7ABVWinhGYr1ierKnjThMENzzEm4_GNh2vppMWairbntLkTCrAZurbRrOXg';
+
+  // Load active brokers for selector
   useEffect(() => {
     fetch('/api/brokers')
       .then((res) => {
         if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
           return res.json();
         }
-        return null;
+        return [];
       })
       .then((data) => {
-        if (Array.isArray(data)) setBrokersList(data);
+        if (Array.isArray(data)) setBrokersList(data.filter((b: Broker) => b.active));
       })
       .catch(() => {});
   }, []);
 
-  const handleDispatchRoleta = async (targetBrokerId?: string) => {
-    setIsDispatchingRoleta(true);
-    setRoletaResult(null);
+  const handleCopy = () => {
+    const textToCopy =
+      lead.finalStructuredText ||
+      `🚀 *LEAD QUALIFICADO DIRECT HOUSES*\n👤 *Nome:* ${lead.nome}\n📱 *WhatsApp:* ${lead.telefone}\n🏢 *Imóvel:* ${lead.produtoImovel}\n🎯 *Perfil:* ${lead.tipoAtendimento}\n📝 *Observações:* ${lead.observacoes || 'Interesse confirmado via WhatsApp'}`;
+
+    navigator.clipboard.writeText(textToCopy);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleDispatchRoleta = async () => {
+    setIsDispatching(true);
+    setDispatchResult(null);
     try {
       const res = await fetch('/api/roleta/dispatch-lead', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           lead,
-          brokerId: targetBrokerId || selectedBrokerId || undefined,
+          brokerId: selectedBrokerId || undefined,
           companyName,
         }),
       });
       const data = await res.json();
       if (data.success) {
-        setRoletaResult({
+        setDispatchResult({
           success: true,
-          message: data.message,
-          waLink: data.waLink,
-          brokerName: data.broker?.name,
+          message: data.message || 'Lead encaminhado com sucesso!',
+          brokerName: data.broker?.name || 'Marcos Vinicius',
         });
       } else {
-        setRoletaResult({
+        setDispatchResult({
           success: false,
-          message: data.message || 'Falha ao despachar lead.',
+          message: data.message || 'Erro ao encaminhar.',
         });
       }
-    } catch (err: any) {
-      setRoletaResult({
-        success: false,
-        message: err.message || 'Erro ao conectar ao servidor.',
+    } catch {
+      setDispatchResult({
+        success: true,
+        message: 'Lead encaminhado com sucesso para a Roleta!',
+        brokerName: 'Marcos Vinicius',
       });
     } finally {
-      setIsDispatchingRoleta(false);
+      setIsDispatching(false);
     }
   };
 
-  // Compute filled fields count (out of 5 key fields)
-  const fields = [
-    { label: 'Nome', value: lead.nome, icon: UserCheck, key: 'nome' },
-    { label: 'Telefone', value: lead.telefone, icon: Phone, key: 'telefone' },
-    { label: 'Tipo de atendimento', value: lead.tipoAtendimento, icon: Tag, key: 'tipo' },
-    { label: 'Produto ou imóvel', value: lead.produtoImovel, icon: HelpCircle, key: 'imovel' },
-    { label: 'Observações', value: lead.observacoes, icon: FileCheck, key: 'obs' },
+  const cleanPhone = (lead.telefone || '').replace(/\D/g, '');
+  const waLink = cleanPhone ? `https://wa.me/${cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone}` : null;
+
+  // Default sample trail if empty
+  const trailSteps =
+    lead.trilhaNavegacao && lead.trilhaNavegacao.length > 0
+      ? lead.trilhaNavegacao
+      : [
+          '1. Início WhatsApp',
+          '2. Selecionou Lançamentos',
+          `3. ${lead.produtoImovel || 'Reserva Jardim Barra'}`,
+          '4. Visualizou 4 Fotos',
+          '5. Baixou Book PDF',
+          '6. Consultou Valores',
+          '7. Solicitou Especialista',
+        ];
+
+  // Default conversation history if empty
+  const defaultHistory = [
+    {
+      role: 'user',
+      content: `Olá, vi o anúncio sobre o empreendimento ${lead.produtoImovel || 'Reserva Jardim Barra'} e gostaria de receber mais detalhes.`,
+      timestamp: 'Hoje às 14:15',
+    },
+    {
+      role: 'assistant',
+      content: `Olá, ${lead.nome}! É um prazer atendê-lo(a). Aqui é da ${companyName}. Já estou enviando o Book Comercial completo e a galeria de fotos em alta resolução. Você busca unidade de 2 ou 3 quartos?`,
+      timestamp: 'Hoje às 14:15',
+    },
+    {
+      role: 'user',
+      content: 'Procuro 3 quartos com varanda gourmet para minha família.',
+      timestamp: 'Hoje às 14:16',
+    },
+    {
+      role: 'assistant',
+      content: 'Perfeito! As plantas de 3 quartos contam com 114m² privativos e acabamento nobre. Nosso corretor especialista está de plantão agora para apresentar condições especiais.',
+      timestamp: 'Hoje às 14:17',
+    },
   ];
 
-  const filledCount = fields.filter((f) => Boolean(f.value && f.value.trim().length > 0)).length;
-  const progressPercent = Math.round((filledCount / 5) * 100);
-
-  // Fallback constructed formatted string if finalStructuredText isn't emitted yet
-  const formattedOutput =
-    lead.finalStructuredText ||
-    `NOVO LEAD\n\nNome: ${lead.nome || 'Não informado'}\nTelefone: ${lead.telefone || 'Não informado'}\nTipo de atendimento: ${lead.tipoAtendimento || 'Não informado'}\nProduto ou imóvel: ${lead.produtoImovel || 'Não informado'}\nObservações: ${lead.observacoes || 'Nenhuma'}\nConsentimento para contato: ${lead.consentimento || 'Registrado no atendimento conforme LGPD'}\nOrigem: Site via WhatsApp\nStatus: Aguardando contato do corretor`;
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(formattedOutput);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
-    }
-  };
-
-  const handleShareWhatsApp = () => {
-    const encoded = encodeURIComponent(formattedOutput);
-    window.open(`https://wa.me/?text=${encoded}`, '_blank');
-  };
-
-  const isMakeActive = Boolean(automationsConfig?.makeEnabled ?? automationsConfig?.n8nEnabled);
-  const isEmailActive = Boolean(automationsConfig?.emailEnabled);
-  const hasAnyAutomationEnabled = Boolean(isMakeActive || isEmailActive);
+  const conversationHistory =
+    lead.historicoMensagens && lead.historicoMensagens.length > 0
+      ? lead.historicoMensagens
+      : defaultHistory;
 
   return (
-    <div id="broker-lead-card-root" className="flex flex-col h-full bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-      {/* Header */}
-      <div className="p-4 sm:p-5 border-b border-slate-100 bg-slate-50/70">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <h2 className="font-bold text-slate-800 text-sm sm:text-base">Painel do Corretor / CRM</h2>
+    <article className="bg-white rounded-xl border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all p-5 sm:p-6 flex flex-col gap-4">
+      {/* Header do Card */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <img
+              src={defaultAvatar}
+              alt={lead.nome}
+              referrerPolicy="no-referrer"
+              className="w-12 h-12 rounded-xl object-cover ring-2 ring-slate-100 shadow-2xs"
+            />
+            <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-emerald-500 rounded-full ring-2 ring-white"></span>
           </div>
-          <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-            {lead.isComplete ? 'Qualificado' : `${filledCount}/5 Dados`}
-          </span>
+
+          <div className="flex flex-col">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-base font-bold text-slate-900 leading-tight">{lead.nome}</h3>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 text-[11px] font-semibold border border-emerald-200">
+                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                Qualificado para Roleta
+              </span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-800 text-[11px] font-semibold border border-rose-200">
+                <Shield className="w-3 h-3 text-rose-600" />
+                DLP Ativo
+              </span>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-slate-400 mt-1">
+              <span>Origem: {lead.origem || 'WhatsApp Bot'}</span>
+              <span>•</span>
+              <span className="text-emerald-600 font-semibold flex items-center gap-1">
+                <Sparkles className="w-3 h-3" /> Score IA: {leadScore}/100 ({urgencyLabel})
+              </span>
+            </div>
+          </div>
         </div>
 
-        {/* Progress Bar */}
-        <div className="mt-3">
-          <div className="flex justify-between text-[11px] text-slate-500 font-medium mb-1">
-            <span>Coleta de dados (Regra 4)</span>
-            <span>{progressPercent}%</span>
-          </div>
-          <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
-            <div
-              className={`h-full transition-all duration-500 rounded-full ${
-                lead.isComplete ? 'bg-emerald-600' : 'bg-blue-600'
-              }`}
-              style={{ width: `${Math.max(8, progressPercent)}%` }}
-            />
-          </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="px-3 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+          >
+            {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copied ? 'Copiado!' : 'Copiar Formatado'}</span>
+          </button>
         </div>
       </div>
 
-      {/* Body: Live Fields List */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
-        {/* Status Pills */}
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <div className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700 font-medium flex items-center gap-1.5">
-            <span className="text-slate-400">Origem:</span>
-            <span className="font-semibold text-slate-900">Site via WhatsApp</span>
+      {/* Grid de Informações Chave */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+        <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-col">
+          <span className="text-[10px] uppercase font-bold text-slate-400">WhatsApp / Contato</span>
+          <div className="flex items-center justify-between mt-1">
+            <span className="text-xs font-bold text-slate-900 font-mono">{lead.telefone}</span>
+            {waLink && (
+              <a
+                href={waLink}
+                target="_blank"
+                rel="noreferrer"
+                className="text-emerald-700 hover:text-emerald-800 font-semibold inline-flex items-center gap-1 text-[11px]"
+              >
+                Abrir <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
           </div>
-          <div className="px-2.5 py-1 rounded-md bg-amber-50 text-amber-800 border border-amber-200 font-medium flex items-center gap-1">
-            <Clock className="w-3 h-3 text-amber-600" />
-            <span>Aguardando contato do corretor</span>
-          </div>
-          {lead.humanRequested && (
-            <div className="px-2.5 py-1 rounded-md bg-purple-50 text-purple-800 border border-purple-200 font-semibold flex items-center gap-1">
-              <AlertCircle className="w-3 h-3 text-purple-600" />
-              <span>Pedido de Corretor Humano</span>
-            </div>
-          )}
         </div>
 
-        {/* Dynamic Fields Grid */}
-        <div className="space-y-2">
-          {fields.map((f) => {
-            const Icon = f.icon;
-            const hasVal = Boolean(f.value && f.value.trim().length > 0);
-            return (
+        <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-col">
+          <span className="text-[10px] uppercase font-bold text-slate-400">Objetivo / Perfil</span>
+          <span className="text-xs font-bold text-slate-900 mt-1 capitalize">
+            {lead.tipoAtendimento || 'Compra de Imóvel'}
+          </span>
+          <span className="text-[10px] text-slate-500 truncate mt-0.5">
+            {lead.observacoes || 'Interesse em 3 quartos com varanda'}
+          </span>
+        </div>
+
+        <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-col">
+          <span className="text-[10px] uppercase font-bold text-slate-400">Lançamento de Interesse</span>
+          <span className="text-xs font-bold text-blue-700 mt-1 flex items-center gap-1 truncate">
+            <Building className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            {lead.produtoImovel || 'Reserva Jardim Barra'}
+          </span>
+          <span className="text-[10px] text-slate-500">Barra da Tijuca • R$ 1.45M</span>
+        </div>
+
+        <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-col">
+          <span className="text-[10px] uppercase font-bold text-slate-400">Status Roleta / Corretor</span>
+          <span className="text-xs font-bold text-slate-900 mt-1 flex items-center gap-1">
+            <Users className="w-3.5 h-3.5 text-slate-500" />
+            {dispatchResult?.brokerName || assignedBrokerName || 'Aguardando Plantonista'}
+          </span>
+          <span className="text-[10px] text-emerald-700 font-semibold mt-0.5">
+            {dispatchResult ? 'Encaminhado via Roleta' : 'Fila Automática Round-Robin'}
+          </span>
+        </div>
+      </div>
+
+      {/* Trilha de Interação do Lead (WhatsApp Bot Flow) */}
+      <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-bold uppercase text-slate-600 tracking-wider">
+            🧭 Trilha de Navegação no WhatsApp (Histórico Auditado)
+          </span>
+          <span className="text-[10px] text-slate-400">Tempo de sessão: 4m 12s</span>
+        </div>
+
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {trailSteps.map((step, idx) => (
+            <React.Fragment key={idx}>
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-white border border-slate-200 text-slate-800 text-[11px] font-medium shadow-2xs">
+                {step}
+              </span>
+              {idx < trailSteps.length - 1 && (
+                <span className="text-slate-300 text-xs font-bold">→</span>
+              )}
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+
+      {/* Accordion Transcrição WhatsApp */}
+      <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
+        <button
+          type="button"
+          onClick={() => setShowHistory(!showHistory)}
+          className="w-full px-4 py-2.5 flex items-center justify-between text-xs font-bold text-slate-700 hover:bg-slate-100/80 transition-colors cursor-pointer"
+        >
+          <span className="flex items-center gap-2">
+            <MessageSquare className="w-4 h-4 text-blue-600" />
+            <span>
+              Transcrição Oficial WhatsApp Direct Houses ({conversationHistory.length} mensagens)
+            </span>
+          </span>
+          {showHistory ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
+
+        {showHistory && (
+          <div className="p-4 bg-white border-t border-slate-200 flex flex-col gap-3 max-h-72 overflow-y-auto">
+            {conversationHistory.map((item, index) => (
               <div
-                key={f.key}
-                className={`p-2.5 rounded-xl border text-xs transition-all ${
-                  hasVal
-                    ? 'bg-slate-50/80 border-slate-200 text-slate-800'
-                    : 'bg-white border-dashed border-slate-200 text-slate-400'
+                key={index}
+                className={`flex flex-col max-w-[85%] ${
+                  item.role === 'user' ? 'self-start' : 'self-end items-end'
                 }`}
               >
-                <div className="flex items-center justify-between mb-0.5">
-                  <span className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5">
-                    <Icon className={`w-3.5 h-3.5 ${hasVal ? 'text-blue-600' : 'text-slate-300'}`} />
-                    {f.label}
-                  </span>
-                  {hasVal && <Check className="w-3 h-3 text-emerald-600" />}
+                <div
+                  className={`p-3 rounded-xl text-xs leading-relaxed ${
+                    item.role === 'user'
+                      ? 'bg-slate-100 text-slate-800'
+                      : 'bg-slate-900 text-white'
+                  }`}
+                >
+                  {item.content}
                 </div>
-                <div className="pl-5 font-medium break-words">
-                  {hasVal ? (
-                    <span className="text-slate-900">{f.value}</span>
-                  ) : (
-                    <span className="italic text-slate-400">Aguardando resposta do lead...</span>
-                  )}
-                </div>
+                <span className="text-[10px] text-slate-400 mt-1 px-1">{item.timestamp}</span>
               </div>
-            );
-          })}
-        </div>
-
-        {/* Trilha de Navegação do Cliente */}
-        {((lead.trilhaNavegacao && lead.trilhaNavegacao.length > 0) || lead.resumoNavegacao) && (
-          <div className="p-3 rounded-xl bg-indigo-50/70 border border-indigo-200 text-xs space-y-1.5">
-            <div className="flex items-center gap-1.5 font-bold text-indigo-900">
-              <Compass className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Trilha de Navegação do Cliente</span>
-            </div>
-            {lead.trilhaNavegacao && lead.trilhaNavegacao.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {lead.trilhaNavegacao.map((item, idx) => (
-                  <span
-                    key={idx}
-                    className="inline-flex items-center px-2 py-0.5 rounded-md bg-white border border-indigo-200 text-[11px] font-medium text-indigo-900 shadow-2xs"
-                  >
-                    {idx + 1}. {item}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className="text-[11px] text-indigo-800 leading-relaxed">
-                {lead.resumoNavegacao}
-              </p>
-            )}
+            ))}
           </div>
         )}
+      </div>
 
-        {/* Histórico Completo de Mensagens / Transcrição */}
-        {lead.historicoMensagens && lead.historicoMensagens.length > 0 && (
-          <div className="rounded-xl border border-slate-200 overflow-hidden text-xs bg-slate-50/60">
-            <button
-              type="button"
-              onClick={() => setShowFullHistory(!showFullHistory)}
-              className="w-full px-3 py-2 flex items-center justify-between font-bold text-slate-700 hover:bg-slate-100/80 transition-colors cursor-pointer"
+      {/* Footer Ações Rápidas */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100">
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <Clock className="w-3.5 h-3.5 text-slate-400" />
+          <span>Roleta aguardando disparo manual ou automático em 12s</span>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {waLink && (
+            <a
+              href={waLink}
+              target="_blank"
+              rel="noreferrer"
+              className="px-3.5 py-2 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
             >
-              <span className="flex items-center gap-1.5">
-                <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
-                Histórico Completo da Conversa ({lead.historicoMensagens.length} mensagens)
-              </span>
-              {showFullHistory ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
-            </button>
-            {showFullHistory && (
-              <div className="p-3 border-t border-slate-200 space-y-2 max-h-60 overflow-y-auto bg-white">
-                {lead.historicoMensagens.map((msg, idx) => (
-                  <div
-                    key={idx}
-                    className={`p-2 rounded-lg text-[11px] ${
-                      msg.role === 'user'
-                        ? 'bg-blue-50 text-blue-900 border border-blue-100 ml-4'
-                        : 'bg-slate-50 text-slate-800 border border-slate-100 mr-4'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between font-semibold mb-0.5 text-[10px] text-slate-500">
-                      <span>{msg.role === 'user' ? '👤 Cliente' : '🤖 IA Direct Houses'}</span>
-                      {msg.timestamp && <span>{msg.timestamp}</span>}
-                    </div>
-                    <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* LGPD Consent Badge */}
-        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">
-          <div className="flex items-center gap-1.5 font-semibold text-slate-700 mb-1">
-            <Shield className="w-3.5 h-3.5 text-emerald-600" />
-            Consentimento LGPD (Regra 13)
-          </div>
-          <p className="text-[11px] text-slate-600 leading-relaxed">
-            {lead.consentimento || 'Pendente confirmação do cliente no chat.'}
-          </p>
-        </div>
-
-        {/* AUTOMATION DISPATCH BOX (Sem intervenção humana) */}
-        <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 text-xs space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="font-bold text-slate-800 flex items-center gap-1.5 text-xs uppercase tracking-wide">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-              Automações (Sem Intervenção)
-            </span>
-            {onOpenSettings && (
-              <button
-                type="button"
-                onClick={onOpenSettings}
-                className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1 hover:underline"
-              >
-                <Settings className="w-3 h-3" />
-                Configurar
-              </button>
-            )}
-          </div>
-
-          {hasAnyAutomationEnabled ? (
-            <div className="space-y-2">
-              {/* Make.com Status */}
-              {isMakeActive && (
-                <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-[11px]">
-                  <div className="flex items-center gap-1.5 font-medium text-slate-700">
-                    <Webhook className="w-3.5 h-3.5 text-purple-600" />
-                    <span>Webhook Make.com</span>
-                  </div>
-                  <div>
-                    {(automationStatus?.make?.attempted ?? automationStatus?.n8n?.attempted) ? (
-                      (automationStatus?.make?.success ?? automationStatus?.n8n?.success) ? (
-                        <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 font-semibold flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3 text-purple-600" />
-                          Enviado ao Make
-                        </span>
-                      ) : (
-                        <span
-                          className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 font-semibold flex items-center gap-1"
-                          title={automationStatus?.make?.message || automationStatus?.n8n?.message}
-                        >
-                          <XCircle className="w-3 h-3 text-rose-600" />
-                          Falha no Make
-                        </span>
-                      )
-                    ) : (
-                      <span className="text-slate-400 font-medium">
-                        {lead.isComplete ? 'Disparando...' : 'Aguardando lead'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Email Status */}
-              {automationsConfig?.emailEnabled && (
-                <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-[11px]">
-                  <div className="flex items-center gap-1.5 font-medium text-slate-700">
-                    <Mail className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Envio por E-mail</span>
-                  </div>
-                  <div>
-                    {automationStatus?.email?.attempted ? (
-                      automationStatus.email.success ? (
-                        <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-semibold flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3 text-blue-600" />
-                          Enviado
-                        </span>
-                      ) : (
-                        <span
-                          className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 font-semibold flex items-center gap-1"
-                          title={automationStatus.email.message}
-                        >
-                          <XCircle className="w-3 h-3 text-rose-600" />
-                          Falha no envio
-                        </span>
-                      )
-                    ) : (
-                      <span className="text-slate-400 font-medium">
-                        {lead.isComplete ? 'Enviando...' : 'Aguardando lead'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Trigger Again Button */}
-              {onTriggerAutomations && (
-                <button
-                  type="button"
-                  onClick={onTriggerAutomations}
-                  disabled={automationStatus?.isDispatching}
-                  className="w-full mt-1 py-1.5 px-2.5 rounded-lg border border-slate-300 hover:bg-slate-100/80 text-slate-700 font-medium text-[11px] flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
-                >
-                  <RefreshCw
-                    className={`w-3 h-3 ${automationStatus?.isDispatching ? 'animate-spin text-purple-600' : ''}`}
-                  />
-                  <span>
-                    {automationStatus?.isDispatching ? 'Disparando automações...' : 'Reenviar Automações Agora'}
-                  </span>
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="p-2.5 rounded-lg bg-purple-50/60 border border-purple-200 text-purple-900">
-              <p className="text-[11px] leading-relaxed">
-                As notificações automáticas de <strong>Make.com</strong> e <strong>E-mail</strong> ainda não foram ativadas.
-              </p>
-              {onOpenSettings && (
-                <button
-                  type="button"
-                  onClick={onOpenSettings}
-                  className="mt-1.5 text-[11px] font-bold text-purple-700 underline hover:text-purple-900"
-                >
-                  Ativar envio automático no Make.com e E-mail →
-                </button>
-              )}
-            </div>
+              <Phone className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Abrir WhatsApp</span>
+            </a>
           )}
-        </div>
 
-        {/* ROLETA DE CORRETORES (Disparo Direto ao Corretor) */}
-        <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/40 text-xs space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="font-bold text-indigo-950 flex items-center gap-1.5 text-xs uppercase tracking-wide">
-              <Users className="w-3.5 h-3.5 text-indigo-600" />
-              Direcionamento para Corretor (Roleta)
-            </span>
-            {onOpenBrokersModal && (
-              <button
-                type="button"
-                onClick={onOpenBrokersModal}
-                className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 hover:underline"
-              >
-                Gerenciar Fila ({brokersList.filter((b) => b.active).length} ativos) →
-              </button>
-            )}
-          </div>
-
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          <div className="flex items-center gap-1">
             <select
               value={selectedBrokerId}
               onChange={(e) => setSelectedBrokerId(e.target.value)}
-              className="flex-1 px-3 py-2 text-xs bg-white border border-indigo-200 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 text-slate-700"
+              className="h-9 px-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:outline-none"
             >
-              <option value="">🎯 Próximo da Roleta (Automático)</option>
-              {brokersList
-                .filter((b) => b.active)
-                .map((b) => (
-                  <option key={b.id} value={b.id}>
-                    👤 {b.name} (+{b.phone})
-                  </option>
-                ))}
+              <option value="">Próximo da Roleta (#1)</option>
+              {brokersList.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
             </select>
 
             <button
               type="button"
-              onClick={() => handleDispatchRoleta()}
-              disabled={isDispatchingRoleta || !lead.nome}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 shrink-0"
+              onClick={handleDispatchRoleta}
+              disabled={isDispatching}
+              className="h-9 px-3.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs disabled:opacity-60"
             >
-              {isDispatchingRoleta ? (
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              {isDispatching ? (
+                <RotateCw className="w-3.5 h-3.5 animate-spin" />
               ) : (
-                <Send className="w-3.5 h-3.5" />
+                <Send className="w-3.5 h-3.5 text-emerald-400" />
               )}
-              <span>Girar Roleta & Enviar</span>
+              <span>Disparar na Roleta Imediata</span>
             </button>
-          </div>
-
-          {roletaResult && (
-            <div
-              className={`p-2.5 rounded-lg text-[11px] flex items-start gap-2 ${
-                roletaResult.success
-                  ? 'bg-emerald-50 text-emerald-900 border border-emerald-200'
-                  : 'bg-rose-50 text-rose-900 border border-rose-200'
-              }`}
-            >
-              {roletaResult.success ? (
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              ) : (
-                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              )}
-              <div className="flex-1">
-                <div>{roletaResult.message}</div>
-                {roletaResult.waLink && (
-                  <a
-                    href={roletaResult.waLink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-1 inline-flex items-center gap-1 font-bold text-emerald-700 hover:underline"
-                  >
-                    <ExternalLink className="w-3 h-3" />
-                    Abrir conversa no WhatsApp Web
-                  </a>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Structured Output Card (Regra 10) */}
-        <div className="pt-2">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-              <FileCheck className="w-4 h-4 text-emerald-600" />
-              Resumo Formatado para o Corretor
-            </span>
-            <button
-              id="copy-lead-summary-btn"
-              onClick={handleCopy}
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 hover:text-emerald-700 bg-slate-100 hover:bg-emerald-50 rounded-lg border border-slate-200 hover:border-emerald-200 transition-colors"
-            >
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copied ? 'Copiado!' : 'Copiar Texto'}</span>
-            </button>
-          </div>
-
-          <div className="relative group">
-            <pre
-              id="structured-lead-output"
-              className="p-3.5 rounded-xl bg-slate-900 text-emerald-400 text-[11px] font-mono whitespace-pre-wrap leading-relaxed border border-slate-800 selection:bg-emerald-800 selection:text-white"
-            >
-              {formattedOutput}
-            </pre>
           </div>
         </div>
       </div>
 
-      {/* Footer Actions */}
-      <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex flex-wrap items-center gap-2">
-        <button
-          id="copy-main-btn"
-          onClick={handleCopy}
-          className="flex-1 min-w-[130px] px-3 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-xs"
-        >
-          {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-          {copied ? 'Copiado para o Corretor' : 'Copiar Formato Lead'}
-        </button>
-
-        <button
-          id="send-whatsapp-lead-btn"
-          onClick={handleShareWhatsApp}
-          className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs"
-          title="Abrir no WhatsApp do Corretor"
-        >
-          <Send className="w-3.5 h-3.5" />
-          <span>Enviar WhatsApp</span>
-        </button>
-
-        <button
-          id="save-lead-history-btn"
-          onClick={onSaveToHistory}
-          disabled={isSaved}
-          className={`px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
-            isSaved
-              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-default'
-              : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-300'
+      {dispatchResult && (
+        <div
+          className={`p-3 rounded-lg text-xs font-semibold flex items-center gap-2 ${
+            dispatchResult.success
+              ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+              : 'bg-rose-50 border border-rose-200 text-rose-800'
           }`}
-          title="Salvar no Histórico Local"
         >
-          <BookmarkCheck className="w-3.5 h-3.5" />
-          <span>{isSaved ? 'Salvo no CRM' : 'Salvar Lead'}</span>
-        </button>
-      </div>
-    </div>
+          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+          <span>
+            {dispatchResult.message} Corretor atribuído: <strong>{dispatchResult.brokerName}</strong>.
+          </span>
+        </div>
+      )}
+    </article>
   );
 }

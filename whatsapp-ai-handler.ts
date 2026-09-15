@@ -17,6 +17,7 @@ import {
   getActiveLancamentos,
   getPublicLancamentosForAI,
   sanitizeAndAuditAIResponse,
+  Lancamento,
 } from './lancamentos-service';
 
 export interface WhatsAppChatSession {
