@@ -31,6 +31,11 @@ import {
   Calendar,
   PhoneCall,
   User,
+  Upload,
+  Image as ImageIcon,
+  FileUp,
+  Download,
+  Loader2,
 } from 'lucide-react';
 
 export type CatalogoStatus =
@@ -107,6 +112,20 @@ export interface LancamentoItem {
   fotos?: string;
   localidade?: string;
   vizinhanca?: string;
+  // Upload direto de mídia para WhatsApp
+  fotosUpload?: Array<{
+    id: string;
+    filename: string;
+    url: string;
+    path?: string;
+    originalName?: string;
+  }>;
+  bookPdfUpload?: {
+    filename: string;
+    url: string;
+    path?: string;
+    originalName?: string;
+  };
   // Nível 3 - Dados Internos
   construtora?: string;
   telefoneConstrutora?: string;
@@ -196,6 +215,12 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
   const [localidade, setLocalidade] = useState('');
   const [vizinhanca, setVizinhanca] = useState('');
 
+  // Mídia Nativa (Upload de Fotos e Book PDF)
+  const [fotosUpload, setFotosUpload] = useState<Array<{ id: string; filename: string; url: string; path?: string; originalName?: string }>>([]);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
+  const [bookPdfUpload, setBookPdfUpload] = useState<{ filename: string; url: string; path?: string; originalName?: string } | null>(null);
+  const [uploadingPdf, setUploadingPdf] = useState(false);
+
   // Nível 3 Internos
   const [construtora, setConstrutora] = useState('');
   const [telefoneConstrutora, setTelefoneConstrutora] = useState('');
@@ -244,6 +269,102 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
     }
   }, [isOpen]);
 
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = (error) => reject(error);
+    });
+  };
+
+  const handleUploadPhotos = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setUploadingPhotos(true);
+    try {
+      const newPhotos = [...fotosUpload];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const base64 = await fileToBase64(file);
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: file.name,
+            dataUrl: base64,
+            type: 'image',
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          newPhotos.push({
+            id: `img-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            filename: data.filename,
+            url: data.url,
+            path: data.path,
+            originalName: file.name,
+          });
+        }
+      }
+      setFotosUpload(newPhotos);
+      setMessage({ success: true, text: `${files.length} foto(s) enviada(s) com sucesso para o WhatsApp!` });
+    } catch (err: any) {
+      console.error('Erro no upload de fotos:', err);
+      setMessage({ success: false, text: 'Erro ao fazer upload das fotos.' });
+    } finally {
+      setUploadingPhotos(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleRemovePhoto = (index: number) => {
+    setFotosUpload((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingPdf(true);
+    try {
+      const base64 = await fileToBase64(file);
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name,
+          dataUrl: base64,
+          type: 'document',
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBookPdfUpload({
+          filename: data.filename,
+          url: data.url,
+          path: data.path,
+          originalName: file.name,
+        });
+        if (!documentoOrigemNome) {
+          setDocumentoOrigemNome(file.name);
+        }
+        setMessage({ success: true, text: `Book PDF "${file.name}" carregado com sucesso para envio!` });
+      }
+    } catch (err: any) {
+      console.error('Erro no upload do PDF:', err);
+      setMessage({ success: false, text: 'Erro ao fazer upload do PDF.' });
+    } finally {
+      setUploadingPdf(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleRemovePdf = () => {
+    setBookPdfUpload(null);
+  };
+
   const resetForm = () => {
     setEditingId(null);
     setStatus('ativo');
@@ -264,6 +385,8 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
     setFotos('');
     setLocalidade('');
     setVizinhanca('');
+    setFotosUpload([]);
+    setBookPdfUpload(null);
     setConstrutora('');
     setTelefoneConstrutora('');
     setEmailConstrutora('');
@@ -296,6 +419,8 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
     setFotos(item.fotos || '');
     setLocalidade(item.localidade || '');
     setVizinhanca(item.vizinhanca || '');
+    setFotosUpload(item.fotosUpload || []);
+    setBookPdfUpload(item.bookPdfUpload || null);
     setConstrutora(item.construtora || '');
     setTelefoneConstrutora(item.telefoneConstrutora || '');
     setEmailConstrutora(item.emailConstrutora || '');
@@ -336,6 +461,9 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
       fotos,
       localidade,
       vizinhanca,
+      // Mídia Nativa
+      fotosUpload,
+      bookPdfUpload,
       // Nível 3 Interno
       construtora,
       telefoneConstrutora,
@@ -777,6 +905,18 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
                                   A partir de {item.precoAPartirDe}
                                 </span>
                               )}
+                              {item.fotosUpload && item.fotosUpload.length > 0 && (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-lg">
+                                  <ImageIcon className="w-3 h-3 text-indigo-600" />
+                                  {item.fotosUpload.length} foto(s) para WhatsApp
+                                </span>
+                              )}
+                              {item.bookPdfUpload && (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-lg">
+                                  <FileText className="w-3 h-3 text-rose-600" />
+                                  Book PDF pronto
+                                </span>
+                              )}
                             </div>
 
                             {/* Public Authorized Content vs Internal Details */}
@@ -1202,30 +1342,98 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
                     Sub-Menu Interativo do WhatsApp (Fotos, Descrição, Localidade, Vizinhança)
                   </h6>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-bold text-slate-700">📸 1. Fotos / Galeria / Tour Virtual</label>
-                        <label className="flex items-center gap-1 text-[11px] text-slate-600 cursor-pointer">
+                  {/* Upload Direto de Fotos para Envio Nativo no WhatsApp */}
+                  <div className="bg-indigo-50/50 border border-indigo-100 rounded-2xl p-4 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100/80 pb-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                            <ImageIcon className="w-4 h-4 text-indigo-600" />
+                            1. Fotos do Empreendimento (Envio Nativo no WhatsApp)
+                          </label>
+                          <label className="flex items-center gap-1 text-[11px] text-indigo-700 cursor-pointer font-semibold">
+                            <input
+                              type="checkbox"
+                              checked={whitelist.fotos}
+                              onChange={(e) => setWhitelist({ ...whitelist, fotos: e.target.checked })}
+                              className="rounded text-indigo-600"
+                            />
+                            Publicável
+                          </label>
+                        </div>
+                        <p className="text-[11px] text-indigo-700/90 mt-0.5">
+                          Faça upload das imagens (JPG/PNG/WEBP). Quando o lead pedir "1️⃣ Fotos" no WhatsApp, a IA enviará as fotos diretamente no chat!
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shadow-xs">
+                          {uploadingPhotos ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Upload className="w-3.5 h-3.5" />
+                          )}
+                          {uploadingPhotos ? 'Enviando...' : 'Adicionar Fotos'}
                           <input
-                            type="checkbox"
-                            checked={whitelist.fotos}
-                            onChange={(e) => setWhitelist({ ...whitelist, fotos: e.target.checked })}
-                            className="rounded text-indigo-600"
+                            type="file"
+                            multiple
+                            accept="image/*"
+                            onChange={handleUploadPhotos}
+                            disabled={uploadingPhotos}
+                            className="hidden"
                           />
-                          Publicável
                         </label>
                       </div>
+                    </div>
+
+                    {/* Previews Grid */}
+                    {fotosUpload.length > 0 && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2.5 pt-1">
+                        {fotosUpload.map((foto, idx) => (
+                          <div
+                            key={foto.id || idx}
+                            className="group relative rounded-xl overflow-hidden border border-indigo-200 bg-white shadow-xs aspect-square flex flex-col items-center justify-center"
+                          >
+                            <img
+                              src={foto.url}
+                              alt={foto.originalName || `Foto ${idx + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-1">
+                              <button
+                                type="button"
+                                onClick={() => handleRemovePhoto(idx)}
+                                title="Remover foto"
+                                className="p-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors cursor-pointer shadow-xs"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                            <span className="absolute bottom-1 left-1 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded font-mono truncate max-w-[90%]">
+                              {foto.originalName || `Foto ${idx + 1}`}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Link alternativo / tour virtual */}
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                        Link de Galeria Online / Tour Virtual (Opcional - link de texto):
+                      </label>
                       <input
                         id="form-fotos-input"
                         type="text"
                         value={fotos}
                         onChange={(e) => setFotos(e.target.value)}
-                        placeholder="Ex: https://directhouse.com.br/fotos/reserva-1.jpg, https://directhouse.com.br/fotos/reserva-2.jpg"
-                        className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                        placeholder="Ex: https://directhouse.com.br/fotos/reserva-1.jpg, https://tour360.com.br/..."
+                        className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
                       />
                     </div>
+                  </div>
 
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <div className="flex items-center justify-between mb-1">
                         <label className="text-xs font-bold text-slate-700">📍 3. Localidade & Referências Públicas</label>
@@ -1379,34 +1587,109 @@ export function LancamentosModal({ isOpen, onClose, companyName }: LancamentosMo
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-rose-900 mb-1 flex items-center justify-between">
-                      <span>Link de Book / PDF Bruto Recebido</span>
-                      <span className="text-[10px] font-mono text-rose-600">DOCUMENTO DE APOIO</span>
-                    </label>
-                    <input
-                      id="form-book-pdf-input"
-                      type="url"
-                      value={linkBookPdf}
-                      onChange={(e) => setLinkBookPdf(e.target.value)}
-                      placeholder="https://.../Book_Construtora.pdf"
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-400 bg-rose-50/30 text-slate-800"
-                    />
-                  </div>
+                  {/* Upload Direto do Book PDF de Lançamento */}
+                  <div className="sm:col-span-2 bg-rose-100/40 border border-rose-200 rounded-2xl p-4 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-rose-200/70 pb-2">
+                      <div>
+                        <label className="text-xs font-bold text-rose-950 flex items-center gap-1.5">
+                          <FileText className="w-4 h-4 text-rose-600" />
+                          Book Comercial de Lançamento (Upload Direto do PDF)
+                        </label>
+                        <p className="text-[11px] text-rose-800/90 mt-0.5">
+                          Arquivo PDF oficial do empreendimento para envio nativo pelo WhatsApp da Direct House quando solicitado pelo lead.
+                        </p>
+                      </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-rose-900 mb-1 flex items-center justify-between">
-                      <span>Nome do Arquivo / Versão da Fonte</span>
-                      <span className="text-[10px] font-mono text-rose-600">METADADO</span>
-                    </label>
-                    <input
-                      id="form-documento-origem-input"
-                      type="text"
-                      value={documentoOrigemNome}
-                      onChange={(e) => setDocumentoOrigemNome(e.target.value)}
-                      placeholder="Ex: Book_Vendas_v3_Oficial.pdf"
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-400 bg-rose-50/30 text-slate-800"
-                    />
+                      <div>
+                        <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shadow-xs">
+                          {uploadingPdf ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <FileUp className="w-3.5 h-3.5" />
+                          )}
+                          {uploadingPdf ? 'Enviando PDF...' : bookPdfUpload ? 'Substituir PDF' : 'Fazer Upload do PDF'}
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            onChange={handleUploadPdf}
+                            disabled={uploadingPdf}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                    {bookPdfUpload ? (
+                      <div className="flex items-center justify-between bg-white p-3 rounded-xl border border-rose-200 shadow-xs">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-2 bg-rose-100 text-rose-700 rounded-lg">
+                            <FileText className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-800 flex items-center gap-2">
+                              {bookPdfUpload.originalName || bookPdfUpload.filename}
+                              <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">
+                                Pronto para WhatsApp
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 font-mono mt-0.5 flex items-center gap-3">
+                              <span>Salvo no servidor local</span>
+                              <a
+                                href={bookPdfUpload.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-indigo-600 hover:underline flex items-center gap-0.5 font-sans font-semibold"
+                              >
+                                <Download className="w-3 h-3" /> Visualizar PDF
+                              </a>
+                            </div>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleRemovePdf}
+                          title="Remover PDF"
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-slate-500 bg-white/60 p-3 rounded-xl border border-dashed border-rose-300 text-center">
+                        Nenhum arquivo PDF carregado ainda. Clique em "Fazer Upload do PDF" para carregar o book comercial.
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-rose-900 mb-1">
+                          Link Alternativo de Book / PDF Externo (Opcional):
+                        </label>
+                        <input
+                          id="form-book-pdf-input"
+                          type="url"
+                          value={linkBookPdf}
+                          onChange={(e) => setLinkBookPdf(e.target.value)}
+                          placeholder="https://.../Book_Construtora.pdf"
+                          className="w-full px-3 py-1.5 text-xs rounded-xl border border-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-400 bg-white text-slate-800"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-rose-900 mb-1">
+                          Nome do Documento de Origem / Metadado:
+                        </label>
+                        <input
+                          id="form-documento-origem-input"
+                          type="text"
+                          value={documentoOrigemNome}
+                          onChange={(e) => setDocumentoOrigemNome(e.target.value)}
+                          placeholder="Ex: Book_Vendas_v3_Oficial.pdf"
+                          className="w-full px-3 py-1.5 text-xs rounded-xl border border-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-400 bg-white text-slate-800"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
 

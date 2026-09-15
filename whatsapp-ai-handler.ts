@@ -388,14 +388,25 @@ function getFallbackReply(
 
     if (currentLanc) {
       // Opção 1: Fotos
-      if (lowerLastMsg === '1' || lowerLastMsg.includes('foto') || lowerLastMsg.includes('imagem') || lowerLastMsg.includes('galeria')) {
+      if (lowerLastMsg === '1' || lowerLastMsg.includes('foto') || lowerLastMsg.includes('imagem') || lowerLastMsg.includes('galeria') || lowerLastMsg.includes('perspectiva')) {
         if (!session.extractedLead.trilhaNavegacao.includes(`Consultou Fotos (${currentLanc.nome})`)) {
           session.extractedLead.trilhaNavegacao.push(`Consultou Fotos (${currentLanc.nome})`);
         }
-        const fotosInfo = currentLanc.fotos || currentLanc.urlPublicaDirectHouse || 'Fotos e perspectivas disponíveis com o consultor.';
+        
+        let fotosMsg = '';
+        if (currentLanc.fotosUpload && currentLanc.fotosUpload.length > 0) {
+          fotosMsg = `Acabei de enviar as fotos e perspectivas oficiais do projeto diretamente aqui no nosso chat! 📲\n`;
+          if (currentLanc.urlPublicaDirectHouse) {
+            fotosMsg += `\nVocê também pode conferir mais fotos e tour virtual no link oficial:\n${currentLanc.urlPublicaDirectHouse}\n`;
+          }
+        } else {
+          const fotosInfo = currentLanc.fotos || currentLanc.urlPublicaDirectHouse || 'Fotos e perspectivas disponíveis com o consultor.';
+          fotosMsg = `Confira as imagens autorizadas do projeto:\n${fotosInfo}\n`;
+        }
+
         return (
           `📸 *Fotos e Perspectivas do ${currentLanc.nome}:*\n\n` +
-          `Confira as imagens autorizadas do projeto:\n${fotosInfo}\n\n` +
+          `${fotosMsg}\n` +
           `Gostaria de ver outro detalhe do projeto?\n` +
           `2️⃣ Descrição | 3️⃣ Localização | 4️⃣ Vizinhança/Lazer | 5️⃣ Valores | 6️⃣ Falar com Corretor`
         );
@@ -809,6 +820,55 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
     content: replyText,
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
   });
+
+  // 📲 Envio nativo de mídias (Fotos e Book PDF) pelo WhatsApp
+  try {
+    const lowerUserMsg = messageText.toLowerCase();
+    const activeLanc = getActiveLancamentos();
+    const targetLanc =
+      activeLanc.find((l) => l.id === session.extractedLead.selectedLancamentoId) ||
+      activeLanc.find((l) => l.nome === session.extractedLead.selectedLancamentoNome) ||
+      (activeLanc.length === 1 ? activeLanc[0] : undefined);
+
+    if (targetLanc) {
+      // 1. Envio nativo de Fotos
+      const isRequestingPhotos =
+        lowerUserMsg === '1' ||
+        lowerUserMsg.includes('foto') ||
+        lowerUserMsg.includes('imagem') ||
+        lowerUserMsg.includes('imagens') ||
+        lowerUserMsg.includes('galeria') ||
+        lowerUserMsg.includes('perspectiva');
+
+      if (isRequestingPhotos && targetLanc.fotosUpload && targetLanc.fotosUpload.length > 0) {
+        for (const foto of targetLanc.fotosUpload.slice(0, 4)) {
+          await whatsAppService.sendImageMessage(
+            jid,
+            foto.path || foto.url,
+            `📸 ${targetLanc.nome} - Direct Houses`
+          );
+        }
+      }
+
+      // 2. Envio nativo de Book PDF
+      const isRequestingBook =
+        lowerUserMsg.includes('book') ||
+        lowerUserMsg.includes('pdf') ||
+        lowerUserMsg.includes('apresenta') ||
+        lowerUserMsg.includes('material completo');
+
+      if (isRequestingBook && targetLanc.bookPdfUpload && (targetLanc.bookPdfUpload.path || targetLanc.bookPdfUpload.url)) {
+        await whatsAppService.sendDocumentMessage(
+          jid,
+          targetLanc.bookPdfUpload.path || targetLanc.bookPdfUpload.url,
+          targetLanc.bookPdfUpload.originalName || `${targetLanc.nome}_Apresentacao.pdf`,
+          `📄 Apresentação Comercial Oficial - ${targetLanc.nome}`
+        );
+      }
+    }
+  } catch (mediaErr) {
+    console.warn('⚠️ [WhatsApp AI] Erro ao enviar mídia nativa:', mediaErr);
+  }
 
   // Send response back to customer on WhatsApp
   await whatsAppService.sendTextMessage(jid, replyText);

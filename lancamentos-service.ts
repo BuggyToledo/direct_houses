@@ -88,6 +88,21 @@ export interface Lancamento {
   localidade?: string; // Pontos de referência públicos e localização geral (sem número de lote)
   vizinhanca?: string; // Vizinhança, conveniências, comércio, escolas, praias e acessos ao redor
 
+  // Upload direto de mídia (Nativo para envio via WhatsApp):
+  fotosUpload?: Array<{
+    id: string;
+    filename: string;
+    url: string;
+    path?: string;
+    originalName?: string;
+  }>;
+  bookPdfUpload?: {
+    filename: string;
+    url: string;
+    path?: string;
+    originalName?: string;
+  };
+
   // ============================================================
   // NÍVEL 3 — Fontes internas de apoio (NÃO PUBLICÁVEIS PELA IA)
   // ============================================================

@@ -377,6 +377,131 @@ class WhatsAppService {
       };
     }
   }
+
+  /**
+   * Send WhatsApp Image (local file path, buffer or web URL)
+   */
+  public async sendImageMessage(
+    phoneOrJid: string,
+    imageSource: string | Buffer,
+    caption?: string
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    if (!this.sock || this.state !== 'connected') {
+      return { success: false, error: 'WhatsApp não está conectado.' };
+    }
+
+    try {
+      let targetJid = phoneOrJid;
+      if (!targetJid.includes('@')) {
+        const clean = cleanPhoneNumber(phoneOrJid);
+        if (!clean) return { success: false, error: 'Número de telefone inválido.' };
+        targetJid = `${clean}@s.whatsapp.net`;
+      }
+
+      let payload: any = { caption };
+
+      if (Buffer.isBuffer(imageSource)) {
+        payload.image = imageSource;
+      } else if (typeof imageSource === 'string') {
+        if (imageSource.startsWith('http://') || imageSource.startsWith('https://')) {
+          payload.image = { url: imageSource };
+        } else {
+          // Resolve relative or local path
+          const fullPath = path.isAbsolute(imageSource)
+            ? imageSource
+            : path.join(process.cwd(), imageSource.startsWith('/') ? imageSource.slice(1) : imageSource);
+
+          if (fs.existsSync(fullPath)) {
+            payload.image = fs.readFileSync(fullPath);
+          } else {
+            // Check if inside .data/uploads
+            const inUploads = path.join(process.cwd(), '.data', 'uploads', path.basename(imageSource));
+            if (fs.existsSync(inUploads)) {
+              payload.image = fs.readFileSync(inUploads);
+            } else {
+              return { success: false, error: `Arquivo de imagem não encontrado: ${imageSource}` };
+            }
+          }
+        }
+      }
+
+      const sentMsg = await this.sock.sendMessage(targetJid, payload);
+      return {
+        success: true,
+        messageId: sentMsg?.key?.id,
+      };
+    } catch (err: any) {
+      console.error(`Erro ao enviar imagem WhatsApp para ${phoneOrJid}:`, err);
+      return {
+        success: false,
+        error: err.message || 'Erro ao enviar imagem.',
+      };
+    }
+  }
+
+  /**
+   * Send WhatsApp Document / PDF
+   */
+  public async sendDocumentMessage(
+    phoneOrJid: string,
+    docSource: string | Buffer,
+    fileName: string = 'Apresentacao.pdf',
+    caption?: string
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    if (!this.sock || this.state !== 'connected') {
+      return { success: false, error: 'WhatsApp não está conectado.' };
+    }
+
+    try {
+      let targetJid = phoneOrJid;
+      if (!targetJid.includes('@')) {
+        const clean = cleanPhoneNumber(phoneOrJid);
+        if (!clean) return { success: false, error: 'Número de telefone inválido.' };
+        targetJid = `${clean}@s.whatsapp.net`;
+      }
+
+      let payload: any = {
+        mimetype: 'application/pdf',
+        fileName,
+        caption,
+      };
+
+      if (Buffer.isBuffer(docSource)) {
+        payload.document = docSource;
+      } else if (typeof docSource === 'string') {
+        if (docSource.startsWith('http://') || docSource.startsWith('https://')) {
+          payload.document = { url: docSource };
+        } else {
+          const fullPath = path.isAbsolute(docSource)
+            ? docSource
+            : path.join(process.cwd(), docSource.startsWith('/') ? docSource.slice(1) : docSource);
+
+          if (fs.existsSync(fullPath)) {
+            payload.document = fs.readFileSync(fullPath);
+          } else {
+            const inUploads = path.join(process.cwd(), '.data', 'uploads', path.basename(docSource));
+            if (fs.existsSync(inUploads)) {
+              payload.document = fs.readFileSync(inUploads);
+            } else {
+              return { success: false, error: `Arquivo PDF não encontrado: ${docSource}` };
+            }
+          }
+        }
+      }
+
+      const sentMsg = await this.sock.sendMessage(targetJid, payload);
+      return {
+        success: true,
+        messageId: sentMsg?.key?.id,
+      };
+    } catch (err: any) {
+      console.error(`Erro ao enviar documento WhatsApp para ${phoneOrJid}:`, err);
+      return {
+        success: false,
+        error: err.message || 'Erro ao enviar documento.',
+      };
+    }
+  }
 }
 
 // Export singleton instance

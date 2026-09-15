@@ -56,7 +56,14 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());
+const UPLOAD_DIR = path.join(process.cwd(), '.data', 'uploads');
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use('/uploads', express.static(UPLOAD_DIR));
 
 // Initialize Google GenAI client lazily or with User-Agent header
 let aiClient: GoogleGenAI | null = null;
@@ -1118,6 +1125,50 @@ app.post('/api/lancamentos/simulate-audit', (req, res) => {
     res.json(audit);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Upload direto de arquivos (Fotos e Book PDF) para armazenamento local e envio no WhatsApp
+app.post('/api/upload', async (req, res) => {
+  try {
+    const { filename, dataUrl, type } = req.body || {};
+    if (!filename || !dataUrl) {
+      return res.status(400).json({ error: 'Arquivo inválido ou ausente.' });
+    }
+
+    // Extract base64 data
+    const matches = dataUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+    let buffer: Buffer;
+    let mimeType = 'application/octet-stream';
+
+    if (matches && matches.length === 3) {
+      mimeType = matches[1];
+      buffer = Buffer.from(matches[2], 'base64');
+    } else {
+      buffer = Buffer.from(dataUrl, 'base64');
+    }
+
+    const cleanName = path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const uniqueName = `${Date.now()}_${cleanName}`;
+    const filePath = path.join(UPLOAD_DIR, uniqueName);
+
+    fs.writeFileSync(filePath, buffer);
+
+    const publicUrl = `/uploads/${uniqueName}`;
+
+    res.json({
+      success: true,
+      filename: uniqueName,
+      originalName: filename,
+      url: publicUrl,
+      path: filePath,
+      size: buffer.length,
+      mimeType,
+      type: type || (mimeType.startsWith('image/') ? 'image' : 'document'),
+    });
+  } catch (err: any) {
+    console.error('Erro no upload de arquivo:', err);
+    res.status(500).json({ error: err.message || 'Erro ao processar upload.' });
   }
 });
 
