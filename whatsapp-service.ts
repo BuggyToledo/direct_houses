@@ -102,12 +102,13 @@ class WhatsAppService {
       return this.getStatus();
     }
 
-    if (force && this.sock) {
+    // Always properly clean up any active socket before starting a new connection attempt
+    if (this.sock) {
       try {
+        this.sock.ev.removeAllListeners();
         this.sock.end(undefined);
       } catch (e) {}
       this.sock = null;
-      this.isConnecting = false;
     }
 
     if (force && this.state !== 'connected') {
@@ -115,15 +116,11 @@ class WhatsAppService {
       this.clearAuthDir();
     }
 
-    if (!force && this.isConnecting) {
-      return this.getStatus();
-    }
-
     this.isConnecting = true;
     this.state = 'connecting';
     this.errorMessage = null;
 
-    // Safety timeout to prevent isConnecting from hanging
+    // Safety timeout to prevent isConnecting from hanging indefinitely
     const connectionTimeout = setTimeout(() => {
       if (this.state === 'connecting') {
         this.isConnecting = false;
@@ -145,7 +142,7 @@ class WhatsAppService {
         authState = authResult.state;
         saveCreds = authResult.saveCreds;
       } catch (authErr) {
-        console.warn('⚠️ [WhatsApp] Falha ao carregar credenciais antigas. Limpando pasta de auth para nova sessão...', authErr);
+        console.warn('⚠️ [WhatsApp] Falha ao carregar credenciais. Limpando pasta para nova sessão...', authErr);
         this.clearAuthDir();
         this.ensureAuthDir();
         const freshAuth = await useMultiFileAuthState(AUTH_DIR);
@@ -153,10 +150,13 @@ class WhatsAppService {
         saveCreds = freshAuth.saveCreds;
       }
 
-      const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1015901307] as any }));
+      const { version } = await fetchLatestBaileysVersion().catch(() => ({
+        version: [2, 3000, 1043857760] as [number, number, number],
+      }));
 
       const logger = pino({ level: 'silent' });
-      const browserConfig = Browsers?.ubuntu ? Browsers.ubuntu('Chrome') : ['Ubuntu', 'Chrome', '22.04.4'];
+      // Use macOS Desktop or Windows Desktop signature to prevent WhatsApp 405 Connection Failure on Linux
+      const browserConfig = Browsers?.macOS ? Browsers.macOS('Desktop') : ['Mac OS', 'Desktop', '14.4.1'];
 
       this.sock = makeWASocket({
         version,
@@ -170,10 +170,18 @@ class WhatsAppService {
         syncFullHistory: false,
         markOnlineOnConnect: true,
         connectTimeoutMs: 60000,
-        keepAliveIntervalMs: 30000,
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 25000,
+        retryRequestDelayMs: 300,
       });
 
-      this.sock.ev.on('creds.update', saveCreds);
+      this.sock.ev.on('creds.update', async () => {
+        try {
+          await saveCreds();
+        } catch (saveErr) {
+          console.error('Erro ao salvar credenciais do WhatsApp:', saveErr);
+        }
+      });
 
       this.sock.ev.on('connection.update', async (update: any) => {
         const { connection, lastDisconnect, qr } = update;
@@ -225,10 +233,13 @@ class WhatsAppService {
 
           console.log(`🔌 [WhatsApp] Conexão fechada. Motivo: ${statusCode}. Reconectar: ${shouldReconnect}`);
 
-          if (statusCode === 515) {
-            console.log('🔄 [WhatsApp] Status 515 (Restart Required). Reconectando imediatamente...');
+          // Status 515 = restartRequired. Occurs right after phone scans the QR code to finalize TLS handshake.
+          if (statusCode === 515 || statusCode === DisconnectReason?.restartRequired) {
+            console.log('🔄 [WhatsApp] Status 515 (Restart Required). Chaves de pareamento recebidas! Reconectando sessão autenticada...');
+            this.state = 'connecting';
             this.reconnectAttempts = 0;
-            setTimeout(() => this.connect(false), 1200);
+            this.qrCodeDataUrl = null;
+            setTimeout(() => this.connect(false), 1500);
             return;
           }
 
@@ -243,10 +254,10 @@ class WhatsAppService {
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
               this.reconnectAttempts++;
               console.log(`🔄 [WhatsApp] Tentando reconectar (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-              setTimeout(() => this.connect(), 3000);
+              setTimeout(() => this.connect(false), 2500);
             } else {
               this.state = 'disconnected';
-              this.errorMessage = 'Limite de tentativas de reconexão excedido. Clique para reconectar.';
+              this.errorMessage = 'Conexão interrompida. Clique em "Atualizar QR Code" para reconectar.';
             }
           } else {
             this.state = 'disconnected';

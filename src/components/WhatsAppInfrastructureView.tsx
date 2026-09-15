@@ -183,6 +183,16 @@ export function WhatsAppInfrastructureView({
     return () => clearInterval(interval);
   }, []);
 
+  // Poll WhatsApp connection status frequently so rotating QR codes and pairing changes update immediately
+  useEffect(() => {
+    onRefreshStatus();
+    const pollInterval = status.state === 'qr_ready' || status.state === 'connecting' ? 2000 : 6000;
+    const interval = setInterval(() => {
+      onRefreshStatus();
+    }, pollInterval);
+    return () => clearInterval(interval);
+  }, [onRefreshStatus, status.state]);
+
   const handleSendTestMessage = async () => {
     if (!testPhone) return;
     setIsSendingTest(true);

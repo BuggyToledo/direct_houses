@@ -36,12 +36,13 @@ export function WhatsAppConnectModal({
   const [testLoading, setTestLoading] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  // Auto poll status while modal is open
+  // Auto poll status while modal is open (fast 2s poll for instant feedback on scan)
   useEffect(() => {
     if (!isOpen) return;
+    onRefreshStatus();
     const interval = setInterval(() => {
       onRefreshStatus();
-    }, 3000);
+    }, 2000);
     return () => clearInterval(interval);
   }, [isOpen, onRefreshStatus]);
 
