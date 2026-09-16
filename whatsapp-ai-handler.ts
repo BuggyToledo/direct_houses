@@ -141,16 +141,23 @@ function buildSystemPrompt(session: WhatsAppChatSession, companyName: string = '
     }
 - Faça SOMENTE esta pergunta.`;
   } else if (!hasTipo) {
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 3 (TIPO DE ATENDIMENTO) - ⚠️ NÃO FINALIZE!
-- O cliente já confirmou o telefone.
-- Ação: Pergunte IMEDIATAMENTE qual tipo de atendimento ele busca:
-  "Perfeito, ${session.name}! Como podemos te ajudar hoje?
-  1️⃣ *Lançamentos (na planta / em construção)*
-  2️⃣ *Comprar imóvel pronto*
-  3️⃣ *Alugar*
-  4️⃣ *Vender um imóvel*
-  5️⃣ *Tirar dúvidas*"
-⛔ PROIBIDO encerrar o atendimento agora! Faça apenas a pergunta das opções acima.`;
+    const originImovelNotice = session.extractedLead.produtoImovel && session.extractedLead.produtoImovel !== 'A combinar com corretor' && session.extractedLead.produtoImovel !== 'Não informado'
+      ? ` referente ao seu interesse no imóvel *${session.extractedLead.produtoImovel}*`
+      : '';
+
+    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 3 (CONFIRMAÇÃO DE CAPTURA + MENU DECISÓRIO)
+- O cliente já confirmou o telefone/WhatsApp. O LEAD JÁ ESTÁ CAPTURADO!
+- Ação: Confirme o registro com simpatia e apresente o MENU DECISÓRIO DE PROSSEGUIMENTO:
+  "Perfeito, ${session.name}! Já registrei seu contato com sucesso${originImovelNotice}. Nosso consultor especialista entrará em contato com você em instantes! 👍
+
+Enquanto preparamos o seu atendimento, como prefere prosseguir?
+1️⃣ *Aguardar contato do corretor* (Já é o suficiente, aguardo a mensagem)
+2️⃣ *Conhecer nossos Lançamentos na Planta* (Fotos, plantas e valores no chat)
+3️⃣ *Buscar Imóveis Prontos* (Comprar ou alugar)
+4️⃣ *Tirar uma dúvida rápida agora*"
+
+⛔ REGRA DE FECHAMENTO IMEDIATO:
+- Se o cliente responder "1", "aguardo", "só isso", "pode chamar", "corretor", "obrigado", "valeu": Finalize o atendimento cordialmente informando que o corretor já está com o contato dele. NUNCA faça novas perguntas nem reinicie menus!`;
   } else if (isLancamentoFlow && !session.extractedLead.selectedLancamentoNome) {
     currentStepDirective = `👉 ETAPA ATUAL: ETAPA 4A (ESCOLHA DO LANÇAMENTO)
 - O cliente quer ver Lançamentos na Planta.
@@ -306,25 +313,71 @@ function getFallbackReply(
     );
   }
 
-  // Detect service type in conversation
-  const fullUserText = userMsgs.map((m) => m.content).join(' ');
-  if (!session.extractedLead.tipoAtendimento) {
-    if (/\blan[çc]amento(s)?\b|na planta|em constru[çc][ãa]o|\b1\b/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Lançamento na Planta';
-    else if (/\bcompr(ar|a|o)?\b|\b2\b/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Comprar Imóvel Pronto';
-    else if (/\balug(ar|uel|o)?\b|\b3\b/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Alugar';
-    else if (/\bvend(er|a|o)?\b|\b4\b/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Vender';
-    else if (/d[uú]vida|\b5\b/i.test(fullUserText)) session.extractedLead.tipoAtendimento = 'Tirar Dúvidas';
-  }
+  // 3. Confirm Capture & Stage 3 Decision Menu
+  if (hasValidPhone && !session.extractedLead.tipoAtendimento) {
+    const lastIsOption1 =
+      lowerLastMsg === '1' ||
+      /\b(aguard(ar|o)|s[oó] isso|pode chamar|contato|corretor|obrigad[oa]|valeu|fechado)\b/i.test(lowerLastMsg);
+    const lastIsOption2 =
+      lowerLastMsg === '2' ||
+      /\blan[çc]amento(s)?\b|na planta|em constru[çc][ãa]o/i.test(lowerLastMsg);
+    const lastIsOption3 =
+      lowerLastMsg === '3' ||
+      /\bcompr(ar|a|o)?\b|\balug(ar|uel|o)?\b|im[oó]ve(l|is) pronto(s)?/i.test(lowerLastMsg);
+    const lastIsOption4 =
+      lowerLastMsg === '4' ||
+      /d[uú]vida/i.test(lowerLastMsg);
 
-  // 3. Ask Service Type
-  if (!session.extractedLead.tipoAtendimento) {
+    if (lastIsOption1) {
+      session.extractedLead.tipoAtendimento = 'Aguardando contato do corretor';
+      session.extractedLead.isComplete = true;
+      if (!session.extractedLead.trilhaNavegacao.includes('Optou por aguardar contato do corretor')) {
+        session.extractedLead.trilhaNavegacao.push('Optou por aguardar contato do corretor');
+      }
+      return (
+        `Perfeito, *${session.name}*! 👍\n\n` +
+        `Sua solicitação já foi registrada e encaminhada ao nosso corretor especialista da ${companyName}.\n` +
+        `Em instantes ele entrará em contato com você aqui no WhatsApp para te dar todo o atendimento e suporte! 🏡 Tenha um excelente dia!`
+      );
+    } else if (lastIsOption2) {
+      session.extractedLead.tipoAtendimento = 'Lançamento na Planta';
+      if (!session.extractedLead.trilhaNavegacao.includes('Interesse: Lançamentos na Planta')) {
+        session.extractedLead.trilhaNavegacao.push('Interesse: Lançamentos na Planta');
+      }
+      return (
+        `Excelente! Conheça nossos lançamentos exclusivos na planta:\n\n` +
+        activeLanc.map((l, i) => `${i + 1}️⃣ *${l.nome}* (${l.bairro}) - ${l.tipologias}`).join('\n') +
+        `\n\nQual desses empreendimentos você gostaria de conhecer melhor? (Digite o número ou o nome)`
+      );
+    } else if (lastIsOption3) {
+      session.extractedLead.tipoAtendimento = 'Comprar ou Alugar Imóvel Pronto';
+      if (!session.extractedLead.trilhaNavegacao.includes('Interesse: Imóveis Prontos')) {
+        session.extractedLead.trilhaNavegacao.push('Interesse: Imóveis Prontos');
+      }
+      return `Perfeito! Que tipo de imóvel você tem em mente (apartamento, casa ou cobertura) e qual a sua região ou bairro de preferência?`;
+    } else if (lastIsOption4) {
+      session.extractedLead.tipoAtendimento = 'Tirar Dúvidas';
+      if (!session.extractedLead.trilhaNavegacao.includes('Interesse: Tirar Dúvidas')) {
+        session.extractedLead.trilhaNavegacao.push('Interesse: Tirar Dúvidas');
+      }
+      return `Com certeza, *${session.name}*! Como posso te ajudar? Pode enviar sua dúvida aqui que te responderei imediatamente.`;
+    }
+
+    // Se acabou de informar o telefone, envia o Menu Decisório Inteligente:
+    const originNotice =
+      session.extractedLead.produtoImovel &&
+      session.extractedLead.produtoImovel !== 'A combinar com corretor' &&
+      session.extractedLead.produtoImovel !== 'Não informado'
+        ? ` referente ao seu interesse no imóvel *${session.extractedLead.produtoImovel}*`
+        : '';
+
     return (
-      `Excelente, *${session.name !== 'Cliente' ? session.name : ''}*! Como podemos te ajudar hoje?\n\n` +
-      `1️⃣ *Lançamentos (na planta / em construção)*\n` +
-      `2️⃣ *Comprar imóvel pronto*\n` +
-      `3️⃣ *Alugar*\n` +
-      `4️⃣ *Vender um imóvel*\n` +
-      `5️⃣ *Tirar dúvidas*`
+      `Perfeito, *${session.name}*! Já registrei seu contato com sucesso${originNotice}. Nosso consultor especialista entrará em contato com você em instantes! 👍\n\n` +
+      `Enquanto preparamos o seu atendimento, como prefere prosseguir?\n\n` +
+      `1️⃣ *Aguardar contato do corretor* (Já é o suficiente, aguardo a mensagem)\n` +
+      `2️⃣ *Conhecer nossos Lançamentos na Planta* (Fotos, plantas e valores no chat)\n` +
+      `3️⃣ *Buscar Imóveis Prontos* (Comprar ou alugar)\n` +
+      `4️⃣ *Tirar uma dúvida rápida agora*`
     );
   }
 
@@ -535,42 +588,71 @@ function extractLeadFromSession(session: WhatsAppChatSession) {
   }
   if (!session.name || isGreetingOnly(session.name)) session.name = 'Cliente';
 
-  // 3. Detect Tipo de Atendimento
+  const hasValidPhone = isValidPhoneNumber(session.phone);
+  const displayPhone = hasValidPhone ? formatPhoneForDisplay(session.phone) : 'Não informado';
+
+  // 3. Detect origin property from initial message if available
+  let produto = session.extractedLead.produtoImovel || '';
+  let selectedLancNome = session.extractedLead.selectedLancamentoNome || '';
+  let selectedLancId = session.extractedLead.selectedLancamentoId || '';
+
+  if (!produto || produto === 'Não informado' || produto === 'A combinar com corretor') {
+    const initMsg = session.initialMessage || '';
+    for (const l of activeLanc) {
+      if (initMsg.toLowerCase().includes(l.nome.toLowerCase())) {
+        selectedLancNome = l.nome;
+        selectedLancId = l.id;
+        produto = `Lançamento ${l.nome} (${l.tipologias})`;
+        break;
+      }
+    }
+    if (!produto && (initMsg.includes('http') || /(apartamento|casa|cobertura|imovel|imóvel|reserva|lote)/i.test(initMsg))) {
+      produto = initMsg.length > 90 ? initMsg.substring(0, 90) + '...' : initMsg;
+    }
+  }
+
+  // 4. Detect Tipo de Atendimento & Decisão do Lead
   let tipo = session.extractedLead.tipoAtendimento || '';
-  if (!tipo) {
-    if (/\blan[çc]amento(s)?\b|na planta|em constru[çc][ãa]o|\b1\b/i.test(userText)) {
+  const lastUserMsg = userMessages[userMessages.length - 1]?.content.toLowerCase().trim() || '';
+
+  // Se o telefone foi fornecido/confirmado e o tipo ainda não foi definido:
+  if (!tipo && hasValidPhone && userMessages.length >= 2) {
+    if (
+      lastUserMsg === '1' ||
+      /\b(aguard(ar|o)|s[oó] isso|pode chamar|contato|corretor|obrigad[oa]|valeu|fechado)\b/i.test(lastUserMsg)
+    ) {
+      tipo = 'Aguardando contato do corretor';
+      session.extractedLead.humanRequested = true;
+      if (!session.extractedLead.trilhaNavegacao.includes('Optou por aguardar contato direto do corretor')) {
+        session.extractedLead.trilhaNavegacao.push('Optou por aguardar contato direto do corretor');
+      }
+    } else if (lastUserMsg === '2' || /\blan[çc]amento(s)?\b|na planta|em constru[çc][ãa]o/i.test(lastUserMsg)) {
       tipo = 'Lançamento na Planta';
       if (!session.extractedLead.trilhaNavegacao.includes('Interesse: Lançamentos na Planta')) {
         session.extractedLead.trilhaNavegacao.push('Interesse: Lançamentos na Planta');
       }
-    } else if (/\bcompr(ar|a|o)?\b|\b2\b/i.test(userText)) {
-      tipo = 'Comprar Imóvel Pronto';
-      if (!session.extractedLead.trilhaNavegacao.includes('Interesse: Comprar Imóvel Pronto')) {
-        session.extractedLead.trilhaNavegacao.push('Interesse: Comprar Imóvel Pronto');
+    } else if (lastUserMsg === '3' || /\bcompr(ar|a|o)?\b|\balug(ar|uel|o)?\b|im[oó]ve(l|is) pronto(s)?/i.test(lastUserMsg)) {
+      tipo = 'Comprar ou Alugar Imóvel Pronto';
+      if (!session.extractedLead.trilhaNavegacao.includes('Interesse: Comprar ou Alugar Imóvel Pronto')) {
+        session.extractedLead.trilhaNavegacao.push('Interesse: Comprar ou Alugar Imóvel Pronto');
       }
-    } else if (/\balug(ar|uel|o)?\b|\b3\b/i.test(userText)) {
-      tipo = 'Alugar';
-      if (!session.extractedLead.trilhaNavegacao.includes('Interesse: Aluguel')) {
-        session.extractedLead.trilhaNavegacao.push('Interesse: Aluguel');
-      }
-    } else if (/\bvend(er|a|o)?\b|\b4\b/i.test(userText)) {
-      tipo = 'Vender';
-      if (!session.extractedLead.trilhaNavegacao.includes('Interesse: Venda')) {
-        session.extractedLead.trilhaNavegacao.push('Interesse: Venda');
-      }
-    } else if (/d[uú]vida|\b5\b/i.test(userText)) {
+    } else if (lastUserMsg === '4' || /d[uú]vida/i.test(lastUserMsg)) {
       tipo = 'Tirar Dúvidas';
       if (!session.extractedLead.trilhaNavegacao.includes('Interesse: Tirar Dúvidas')) {
         session.extractedLead.trilhaNavegacao.push('Interesse: Tirar Dúvidas');
       }
     }
+  } else if (!tipo) {
+    if (/\blan[çc]amento(s)?\b|na planta|em constru[çc][ãa]o/i.test(userText)) {
+      tipo = 'Lançamento na Planta';
+    } else if (/\bcompr(ar|a|o)?\b/i.test(userText)) {
+      tipo = 'Comprar Imóvel Pronto';
+    } else if (/\balug(ar|uel|o)?\b/i.test(userText)) {
+      tipo = 'Alugar';
+    }
   }
 
-  // 4. Detect Launch or Property
-  let produto = session.extractedLead.produtoImovel || '';
-  let selectedLancNome = session.extractedLead.selectedLancamentoNome || '';
-  let selectedLancId = session.extractedLead.selectedLancamentoId || '';
-
+  // 5. Detect Launch or Property mentioned in text
   for (const l of activeLanc) {
     if (userText.toLowerCase().includes(l.nome.toLowerCase())) {
       selectedLancNome = l.nome;
@@ -617,7 +699,7 @@ function extractLeadFromSession(session: WhatsAppChatSession) {
     }
   }
 
-  // 5. Detect Observações
+  // 6. Detect Observações
   let obs = session.extractedLead.observacoes || '';
   if (!obs && userMessages.length >= 4) {
     const lastMsg = userMessages[userMessages.length - 1].content;
@@ -626,16 +708,17 @@ function extractLeadFromSession(session: WhatsAppChatSession) {
     }
   }
 
-  // Strict check for explicit human broker request
-  const humanRequested = /(falar\s*com\s*(um\s*)?(humano|corretor|pessoa|atendente)|passa(r)?\s*p(ra|ro)\s*(um\s*)?(humano|corretor|pessoa)|quero\s*(um\s*)?(humano|atendente)|chama(r)?\s*(um\s*)?corretor|\b6\b)/i.test(
-    userText
-  );
+  // Strict check for explicit human broker request or decision choice 1
+  const isAguardandoCorretor = tipo === 'Aguardando contato do corretor';
+  const humanRequested =
+    isAguardandoCorretor ||
+    /(falar\s*com\s*(um\s*)?(humano|corretor|pessoa|atendente)|passa(r)?\s*p(ra|ro)\s*(um\s*)?(humano|corretor|pessoa)|quero\s*(um\s*)?(humano|atendente)|chama(r)?\s*(um\s*)?corretor|\b6\b)/i.test(
+      userText
+    );
 
-  const hasValidPhone = isValidPhoneNumber(session.phone);
-  const displayPhone = hasValidPhone ? formatPhoneForDisplay(session.phone) : 'Não informado';
-
-  // Lead is complete ONLY when all stages are completed or human was explicitly requested
+  // Lead is complete when user chose option 1 (Aguardar corretor), explicit human requested, or qualified across stages
   const isFullyQualified = Boolean(
+    (hasValidPhone && isAguardandoCorretor) ||
     humanRequested ||
       (userMessages.length >= 4 &&
         session.name !== 'Cliente' &&
@@ -660,7 +743,7 @@ function extractLeadFromSession(session: WhatsAppChatSession) {
     nome: session.name !== 'Cliente' ? session.name : 'Cliente WhatsApp',
     telefone: displayPhone,
     tipoAtendimento: tipo || session.extractedLead.tipoAtendimento || '',
-    produtoImovel: produto || session.extractedLead.produtoImovel || '',
+    produtoImovel: produto || session.extractedLead.produtoImovel || 'Imóvel sob consulta',
     selectedLancamentoId: selectedLancId || session.extractedLead.selectedLancamentoId,
     selectedLancamentoNome: selectedLancNome || session.extractedLead.selectedLancamentoNome,
     trilhaNavegacao: session.extractedLead.trilhaNavegacao,
@@ -673,7 +756,7 @@ function extractLeadFromSession(session: WhatsAppChatSession) {
     status: isFullyQualified ? 'Qualificado - Aguardando corretor' : 'Em atendimento inicial',
     isComplete: isFullyQualified,
     humanRequested,
-    finalStructuredText: `NOVO LEAD\nNome: ${session.name}\nTelefone: ${displayPhone}\nTipo de atendimento: ${tipo || 'Comprar'}\nProduto ou imóvel: ${produto || 'A combinar com corretor'}\nTrilha de navegação: ${resumoNavegacao}\nObservações: ${obs || 'Nenhuma'}\nConsentimento para contato: Sim, autorizado conforme LGPD\nOrigem: WhatsApp Web Direct Houses\nStatus: Aguardando contato do corretor`,
+    finalStructuredText: `NOVO LEAD\nNome: ${session.name}\nTelefone: ${displayPhone}\nTipo de atendimento: ${tipo || 'Aguardando corretor'}\nProduto ou imóvel: ${produto || 'A combinar com corretor'}\nTrilha de navegação: ${resumoNavegacao}\nObservações: ${obs || 'Nenhuma'}\nConsentimento para contato: Sim, autorizado conforme LGPD\nOrigem: WhatsApp Web Direct Houses\nStatus: Aguardando contato do corretor`,
   };
 
   if (isFullyQualified && session.status === 'active') {
@@ -796,11 +879,10 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
   }
 
   // Anti-skip Safety Check: If AI generated premature closing before lead is fully qualified
-  const userMessages = session.messages.filter((m) => m.role === 'user');
-  const userText = userMessages.map((m) => m.content).join(' ');
-  const isExplicitHuman = /(falar\s*com\s*(um\s*)?(humano|corretor|pessoa|atendente)|passa(r)?\s*p(ra|ro)\s*(um\s*)?(humano|corretor|pessoa)|quero\s*(um\s*)?(humano|atendente)|chama(r)?\s*(um\s*)?corretor|\b6\b)/i.test(userText);
+  const isAguardandoCorretor = session.extractedLead.tipoAtendimento === 'Aguardando contato do corretor';
+  const isExplicitHuman = isAguardandoCorretor || /(falar\s*com\s*(um\s*)?(humano|corretor|pessoa|atendente)|passa(r)?\s*p(ra|ro)\s*(um\s*)?(humano|corretor|pessoa)|quero\s*(um\s*)?(humano|atendente)|chama(r)?\s*(um\s*)?corretor|\b1\b|\b6\b)/i.test(userText);
 
-  if (!session.extractedLead.isComplete && !isExplicitHuman && userMessages.length < 4 && /encaminhando|conectando|transferindo|NOVO LEAD/i.test(replyText)) {
+  if (!session.extractedLead.isComplete && !isExplicitHuman && userMessages.length < 3 && /encaminhando|conectando|transferindo|NOVO LEAD/i.test(replyText)) {
     console.warn('⚠️ [WhatsApp AI] Resposta tentou finalizar antes da hora. Reorientando para a próxima pergunta de qualificação...');
     replyText = getFallbackReply(session, companyName);
   }
