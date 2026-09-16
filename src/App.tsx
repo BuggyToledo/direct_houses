@@ -278,7 +278,7 @@ export default function App() {
       {/* 1. Header Executivo Fixo (Google Stitch Design System) */}
       <header
         id="app-header"
-        className="fixed top-0 left-0 right-0 h-20 bg-white/95 backdrop-blur-xl z-50 border-b border-slate-200/80 shadow-xs"
+        className="fixed top-0 left-0 right-0 h-20 bg-white/95 backdrop-blur-xl z-30 border-b border-slate-200/80 shadow-xs"
       >
         <div className="w-full h-full px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
           {/* Brand Info */}
@@ -451,6 +451,12 @@ export default function App() {
       </header>
 
       {/* 2. Sidebar Lateral Fixa (Navegação Executiva) */}
+      {isMobileMenuOpen && (
+        <div
+          className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-35 lg:hidden"
+          onClick={() => setIsMobileMenuOpen(false)}
+        />
+      )}
       <aside
         id="app-sidebar"
         className={`fixed left-0 top-20 bottom-0 w-64 bg-white z-40 flex flex-col justify-between py-4 border-r border-slate-200/80 shadow-xs transition-transform duration-200 lg:translate-x-0 ${
@@ -591,7 +597,7 @@ export default function App() {
       </aside>
 
       {/* 3. Main Workspace Area */}
-      <main className="pl-0 lg:pl-64 pt-20 min-h-screen flex-1 p-4 sm:p-6 lg:p-8">
+      <main className="lg:ml-64 min-h-screen flex-1 pt-24 sm:pt-28 px-4 sm:px-6 lg:px-8 pb-12 transition-all">
         {activeTab === 'overview' && (
           <LeadsDashboard
             leads={persistentLeads}
