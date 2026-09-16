@@ -11,7 +11,8 @@ import {
   extractPhoneFromText,
   getBrokers,
 } from './broker-roleta';
-import { recordLead } from './leads-service';
+import { recordLead, addLeadDistribution } from './leads-service';
+import { recordDistributionLog } from './roleta-history-service';
 import {
   formatLancamentosForPrompt,
   getActiveLancamentos,
@@ -929,9 +930,25 @@ export async function dispatchSessionLeadToRoleta(
 
     console.log(`🎯 [Roleta] Lead de ${session.extractedLead.nome} (${session.phone}) encaminhado para ${chosenBroker.name} (${chosenBroker.phone})`);
     
+    const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
+
+    // Record in Roleta Distribution History
+    recordDistributionLog({
+      leadId,
+      leadNome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
+      leadTelefone: session.extractedLead.telefone || session.phone,
+      brokerId: chosenBroker.id,
+      brokerNome: chosenBroker.name,
+      brokerTelefone: chosenBroker.phone,
+      tipoDistribuicao: 'automatica_roleta',
+      statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
+      motivo: 'Qualificação completa via IA no WhatsApp',
+      produtoImovel: session.extractedLead.produtoImovel || 'A combinar',
+    });
+
     // Update persistent lead
     recordLead({
-      id: `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`,
+      id: leadId,
       nome: session.extractedLead.nome,
       telefone: session.extractedLead.telefone || session.phone,
       tipoAtendimento: session.extractedLead.tipoAtendimento,
@@ -939,9 +956,21 @@ export async function dispatchSessionLeadToRoleta(
       observacoes: session.extractedLead.observacoes,
       initialMessage: session.initialMessage,
       origem: 'WhatsApp Web Direct Houses',
-      status: 'Direcionado na Roleta',
+      status: 'em_atendimento',
+      temperatura: 'quente',
       assignedBroker: session.assignedBroker,
       rawStructuredText: session.extractedLead.finalStructuredText,
+      historicoDistribuicoes: [
+        {
+          id: `dist-${Date.now()}`,
+          brokerId: chosenBroker.id,
+          brokerName: chosenBroker.name,
+          brokerPhone: chosenBroker.phone,
+          data: new Date().toISOString(),
+          tipo: 'automatica_roleta',
+          statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
+        },
+      ],
     });
 
     return {
@@ -995,9 +1024,25 @@ export async function dispatchSessionLeadToSpecificBroker(
     const clientNotice = formatClientAssignedMessage(chosenBroker.name, companyName);
     await whatsAppService.sendTextMessage(session.jid, clientNotice);
 
+    const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
+
+    // Record in Roleta Distribution History
+    recordDistributionLog({
+      leadId,
+      leadNome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
+      leadTelefone: session.extractedLead.telefone || session.phone,
+      brokerId: chosenBroker.id,
+      brokerNome: chosenBroker.name,
+      brokerTelefone: chosenBroker.phone,
+      tipoDistribuicao: 'manual_operador',
+      statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
+      motivo: 'Direcionamento específico pelo operador',
+      produtoImovel: session.extractedLead.produtoImovel || 'A combinar',
+    });
+
     // Update persistent lead
     recordLead({
-      id: `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`,
+      id: leadId,
       nome: session.extractedLead.nome,
       telefone: session.extractedLead.telefone || session.phone,
       tipoAtendimento: session.extractedLead.tipoAtendimento,
@@ -1005,9 +1050,21 @@ export async function dispatchSessionLeadToSpecificBroker(
       observacoes: session.extractedLead.observacoes,
       initialMessage: session.initialMessage,
       origem: 'WhatsApp Web Direct Houses',
-      status: 'Direcionado na Roleta',
+      status: 'em_atendimento',
+      temperatura: 'quente',
       assignedBroker: session.assignedBroker,
       rawStructuredText: session.extractedLead.finalStructuredText,
+      historicoDistribuicoes: [
+        {
+          id: `dist-${Date.now()}`,
+          brokerId: chosenBroker.id,
+          brokerName: chosenBroker.name,
+          brokerPhone: chosenBroker.phone,
+          data: new Date().toISOString(),
+          tipo: 'manual_operador',
+          statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
+        },
+      ],
     });
 
     return {
@@ -1081,9 +1138,24 @@ async function checkInactiveSessions() {
             assignedAt: new Date().toISOString(),
           };
 
+          const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
+
+          recordDistributionLog({
+            leadId,
+            leadNome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
+            leadTelefone: session.extractedLead.telefone || session.phone,
+            brokerId: chosenBroker.id,
+            brokerNome: chosenBroker.name,
+            brokerTelefone: chosenBroker.phone,
+            tipoDistribuicao: 'timeout_recuperacao',
+            statusEnvioWhatsApp: 'enviado',
+            motivo: 'Recuperação por inatividade (> 5 min sem resposta)',
+            produtoImovel: session.extractedLead.produtoImovel || 'A combinar com corretor',
+          });
+
           // Update persistent lead
           recordLead({
-            id: `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`,
+            id: leadId,
             nome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
             telefone: session.extractedLead.telefone || session.phone,
             tipoAtendimento: session.extractedLead.tipoAtendimento || 'Interesse Comercial Inicial',
@@ -1091,8 +1163,20 @@ async function checkInactiveSessions() {
             observacoes: 'Cliente parou de responder após 5 minutos. Lead recuperado e direcionado na roleta.',
             initialMessage: session.initialMessage || session.messages[0]?.content || '',
             origem: 'WhatsApp Web Direct Houses',
-            status: 'Recuperado por Inatividade',
+            status: 'em_atendimento',
+            temperatura: 'quente',
             assignedBroker: session.assignedBroker,
+            historicoDistribuicoes: [
+              {
+                id: `dist-${Date.now()}`,
+                brokerId: chosenBroker.id,
+                brokerName: chosenBroker.name,
+                brokerPhone: chosenBroker.phone,
+                data: new Date().toISOString(),
+                tipo: 'timeout_recuperacao',
+                statusEnvioWhatsApp: 'enviado',
+              },
+            ],
           });
 
           console.log(`✅ [Inatividade] Lead recuperado e enviado com sucesso para ${chosenBroker.name} (${chosenBroker.phone})`);

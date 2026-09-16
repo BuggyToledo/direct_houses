@@ -37,9 +37,20 @@ import {
 import {
   getPersistentLeads,
   recordLead,
+  updateLead,
+  updateLeadStage,
+  addLeadNote,
+  addLeadDistribution,
   deletePersistentLead,
   clearAllPersistentLeads,
+  getLeadsMetrics,
 } from './leads-service';
+import {
+  getRoletaDistributionHistory,
+  recordDistributionLog,
+  clearRoletaDistributionHistory,
+  getRoletaDistributionStats,
+} from './roleta-history-service';
 import {
   getLancamentos,
   addLancamento,
@@ -973,25 +984,252 @@ app.post('/api/whatsapp/chats/:jid/dispatch', async (req, res) => {
 });
 
 // ==========================================
-// Persistent Leads Management Endpoints
+// Persistent Leads Management & CRM Endpoints
 // ==========================================
 
-// Get all persistent leads
+// Get all persistent leads with optional filters
 app.get('/api/leads', (req, res) => {
   try {
-    res.json(getPersistentLeads());
+    let leads = getPersistentLeads();
+    const { search, status, temperatura, brokerId } = req.query as Record<string, string>;
+
+    if (search && search.trim()) {
+      const q = search.toLowerCase().trim();
+      leads = leads.filter(
+        (l) =>
+          (l.nome && l.nome.toLowerCase().includes(q)) ||
+          (l.telefone && l.telefone.includes(q)) ||
+          (l.produtoImovel && l.produtoImovel.toLowerCase().includes(q)) ||
+          (l.tipoAtendimento && l.tipoAtendimento.toLowerCase().includes(q)) ||
+          (l.assignedBroker?.name && l.assignedBroker.name.toLowerCase().includes(q))
+      );
+    }
+
+    if (status && status !== 'all') {
+      leads = leads.filter((l) => (l.status || '').toLowerCase() === status.toLowerCase());
+    }
+
+    if (temperatura && temperatura !== 'all') {
+      leads = leads.filter((l) => (l.temperatura || '').toLowerCase() === temperatura.toLowerCase());
+    }
+
+    if (brokerId && brokerId !== 'all') {
+      leads = leads.filter((l) => l.assignedBroker?.id === brokerId);
+    }
+
+    res.json(leads);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Save or update lead
+// Get Leads Metrics
+app.get('/api/leads/metrics', (req, res) => {
+  try {
+    res.json(getLeadsMetrics());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Export Leads in CSV format (UTF-8 with BOM for Excel)
+app.get('/api/leads/export/csv', (req, res) => {
+  try {
+    const leads = getPersistentLeads();
+    const header = [
+      'ID',
+      'Data de Criação',
+      'Nome do Cliente',
+      'Telefone',
+      'Email',
+      'Etapa/Status',
+      'Temperatura',
+      'Tipo de Atendimento',
+      'Imóvel/Produto',
+      'Valor de Interesse',
+      'Corretor Atribuído',
+      'Telefone do Corretor',
+      'Origem',
+      'Observações',
+    ];
+
+    const escapeCsv = (val: any) => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const rows = leads.map((l) => [
+      l.id,
+      new Date(l.createdAt).toLocaleString('pt-BR'),
+      l.nome,
+      l.telefone,
+      l.email || '',
+      l.status,
+      l.temperatura || 'morno',
+      l.tipoAtendimento,
+      l.produtoImovel,
+      l.valorInteresse || '',
+      l.assignedBroker?.name || 'Não Atribuído',
+      l.assignedBroker?.phone || '',
+      l.origem,
+      l.observacoes,
+    ]);
+
+    const csvContent = '\uFEFF' + [header, ...rows].map((r) => r.map(escapeCsv).join(';')).join('\r\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="leads-direct-houses.csv"');
+    res.send(csvContent);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Save or create new lead
 app.post('/api/leads', (req, res) => {
   try {
     const lead = recordLead(req.body || {});
     res.json(lead);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Update lead details
+app.put('/api/leads/:id', (req, res) => {
+  try {
+    const updated = updateLead(req.params.id, req.body || {});
+    if (!updated) {
+      return res.status(404).json({ error: 'Lead não encontrado.' });
+    }
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Quick update of lead stage/status (Kanban drag or stage select)
+app.patch('/api/leads/:id/stage', (req, res) => {
+  try {
+    const { stage } = req.body || {};
+    if (!stage) {
+      return res.status(400).json({ error: 'Etapa é obrigatória.' });
+    }
+    const updated = updateLeadStage(req.params.id, stage);
+    if (!updated) {
+      return res.status(404).json({ error: 'Lead não encontrado.' });
+    }
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add internal note to a lead
+app.post('/api/leads/:id/notes', (req, res) => {
+  try {
+    const { texto, autor } = req.body || {};
+    if (!texto || !texto.trim()) {
+      return res.status(400).json({ error: 'Texto da nota é obrigatório.' });
+    }
+    const updated = addLeadNote(req.params.id, { texto, autor: autor || 'Equipe Comercial' });
+    if (!updated) {
+      return res.status(404).json({ error: 'Lead não encontrado.' });
+    }
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Redistribute an existing lead in the Roleta (to next broker or specific broker)
+app.post('/api/leads/:id/redistribute', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { brokerId, motivo, companyName } = req.body || {};
+    const company = companyName || DEFAULT_COMPANY;
+
+    const leads = getPersistentLeads();
+    const lead = leads.find((l) => l.id === id);
+    if (!lead) {
+      return res.status(404).json({ success: false, message: 'Lead não encontrado.' });
+    }
+
+    let broker: any = null;
+    if (brokerId) {
+      const brokers = getBrokers();
+      broker = brokers.find((b) => b.id === brokerId);
+    } else {
+      broker = getNextBrokerInRoleta();
+    }
+
+    if (!broker) {
+      return res.status(400).json({ success: false, message: 'Nenhum corretor ativo disponível na roleta.' });
+    }
+
+    const brokerMessage = formatBrokerLeadMessage(
+      {
+        nome: lead.nome,
+        telefone: lead.telefone,
+        tipoAtendimento: lead.tipoAtendimento,
+        produtoImovel: lead.produtoImovel,
+        observacoes: `${lead.observacoes || ''}\n[Redistribuição: ${motivo || 'Reatribuição pela gerência comercial'}]`,
+        origem: lead.origem,
+        trilhaNavegacao: lead.trilhaNavegacao,
+        resumoNavegacao: lead.resumoNavegacao,
+        historicoMensagens: lead.historicoMensagens,
+      },
+      company,
+      lead.telefone
+    );
+
+    let sentViaWhatsApp = false;
+    let whatsappError = '';
+    const waStatus = whatsAppService.getStatus();
+
+    if (waStatus.state === 'connected') {
+      const sendRes = await whatsAppService.sendTextMessage(broker.phone, brokerMessage);
+      sentViaWhatsApp = sendRes.success;
+      if (!sendRes.success) whatsappError = sendRes.error || '';
+    }
+
+    // Record in Roleta Distribution History
+    const distLog = recordDistributionLog({
+      leadId: lead.id,
+      leadNome: lead.nome,
+      leadTelefone: lead.telefone,
+      brokerId: broker.id,
+      brokerNome: broker.name,
+      brokerTelefone: broker.phone,
+      tipoDistribuicao: 'redistribuicao',
+      statusEnvioWhatsApp: sentViaWhatsApp ? 'enviado' : 'link_gerado',
+      motivo: motivo || 'Redistribuição manual solicitada pelo operador',
+      produtoImovel: lead.produtoImovel,
+    });
+
+    // Update lead with distribution record
+    const updatedLead = addLeadDistribution(lead.id, {
+      brokerId: broker.id,
+      brokerName: broker.name,
+      brokerPhone: broker.phone,
+      tipo: 'redistribuicao',
+      statusEnvioWhatsApp: sentViaWhatsApp ? 'enviado' : 'link_gerado',
+    });
+
+    res.json({
+      success: true,
+      lead: updatedLead,
+      broker,
+      sentViaWhatsApp,
+      whatsappError: whatsappError || undefined,
+      distLog,
+      waLink: `https://wa.me/${broker.phone}?text=${encodeURIComponent(brokerMessage)}`,
+      message: sentViaWhatsApp
+        ? `Lead redistribuído com sucesso para ${broker.name} via WhatsApp!`
+        : `Lead redistribuído para ${broker.name}. (WhatsApp desconectado, link direto gerado).`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Erro ao redistribuir lead' });
   }
 });
 
@@ -1010,6 +1248,109 @@ app.delete('/api/leads', (req, res) => {
   try {
     const success = clearAllPersistentLeads();
     res.json({ success });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// Histórico de Distribuição na Roleta Endpoints
+// ==========================================
+
+// Get Roleta distribution history
+app.get('/api/roleta/history', (req, res) => {
+  try {
+    let history = getRoletaDistributionHistory();
+    const { brokerId, search, statusEnvio } = req.query as Record<string, string>;
+
+    if (brokerId && brokerId !== 'all') {
+      history = history.filter((h) => h.brokerId === brokerId);
+    }
+    if (statusEnvio && statusEnvio !== 'all') {
+      history = history.filter((h) => h.statusEnvioWhatsApp === statusEnvio);
+    }
+    if (search && search.trim()) {
+      const q = search.toLowerCase().trim();
+      history = history.filter(
+        (h) =>
+          h.leadNome.toLowerCase().includes(q) ||
+          h.leadTelefone.includes(q) ||
+          h.brokerNome.toLowerCase().includes(q) ||
+          (h.motivo && h.motivo.toLowerCase().includes(q)) ||
+          (h.produtoImovel && h.produtoImovel.toLowerCase().includes(q))
+      );
+    }
+
+    res.json({
+      history,
+      stats: getRoletaDistributionStats(),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get Roleta distribution stats
+app.get('/api/roleta/history/stats', (req, res) => {
+  try {
+    res.json(getRoletaDistributionStats());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clear Roleta distribution history (Admin)
+app.delete('/api/roleta/history', (req, res) => {
+  try {
+    const success = clearRoletaDistributionHistory();
+    res.json({ success, message: 'Histórico da roleta reiniciado com sucesso.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Export Roleta distribution history to CSV
+app.get('/api/roleta/history/export/csv', (req, res) => {
+  try {
+    const history = getRoletaDistributionHistory();
+    const header = [
+      'ID Distribuição',
+      'Data e Hora',
+      'Nome do Lead',
+      'Telefone do Lead',
+      'Imóvel de Interesse',
+      'Corretor que Recebeu',
+      'Telefone do Corretor',
+      'Tipo de Distribuição',
+      'Envio no WhatsApp',
+      'Motivo / Observação',
+      'Tempo de Resposta SLA',
+    ];
+
+    const escapeCsv = (val: any) => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const rows = history.map((h) => [
+      h.id,
+      new Date(h.timestamp).toLocaleString('pt-BR'),
+      h.leadNome,
+      h.leadTelefone,
+      h.produtoImovel || '',
+      h.brokerNome,
+      h.brokerTelefone,
+      h.tipoDistribuicao,
+      h.statusEnvioWhatsApp,
+      h.motivo || '',
+      h.tempoSLA || '',
+    ]);
+
+    const csvContent = '\uFEFF' + [header, ...rows].map((r) => r.map(escapeCsv).join(';')).join('\r\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="historico-roleta-direct-houses.csv"');
+    res.send(csvContent);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1274,9 +1615,35 @@ app.post('/api/roleta/dispatch-lead', async (req, res) => {
       }
     }
 
+    // Record distribution log in history
+    const distLog = recordDistributionLog({
+      leadId: lead.id || `lead-${Date.now()}`,
+      leadNome: lead.nome || 'Cliente',
+      leadTelefone: lead.telefone || '',
+      brokerId: broker.id,
+      brokerNome: broker.name,
+      brokerTelefone: broker.phone,
+      tipoDistribuicao: brokerId ? 'manual_operador' : 'automatica_roleta',
+      statusEnvioWhatsApp: sentViaWhatsApp ? 'enviado' : 'link_gerado',
+      motivo: brokerId ? 'Direcionamento manual para corretor' : 'Distribuição via Roleta de Atendimento',
+      produtoImovel: lead.produtoImovel,
+    });
+
+    // If lead exists in persistent leads, update it with broker assignment
+    if (lead.id) {
+      addLeadDistribution(lead.id, {
+        brokerId: broker.id,
+        brokerName: broker.name,
+        brokerPhone: broker.phone,
+        tipo: brokerId ? 'manual_operador' : 'automatica_roleta',
+        statusEnvioWhatsApp: sentViaWhatsApp ? 'enviado' : 'link_gerado',
+      });
+    }
+
     res.json({
       success: true,
       broker,
+      distLog,
       sentViaWhatsApp,
       whatsappError: whatsappError || undefined,
       formattedMessage: brokerMessage,
@@ -1325,6 +1692,20 @@ app.post('/api/roleta/test-dispatch', async (req, res) => {
       const sendRes = await whatsAppService.sendTextMessage(broker.phone, brokerMessage);
       sentViaWhatsApp = sendRes.success;
     }
+
+    // Log test distribution
+    recordDistributionLog({
+      leadId: `test-lead-${Date.now()}`,
+      leadNome: testLead.nome,
+      leadTelefone: testLead.telefone,
+      brokerId: broker.id,
+      brokerNome: broker.name,
+      brokerTelefone: broker.phone,
+      tipoDistribuicao: brokerId ? 'manual_operador' : 'automatica_roleta',
+      statusEnvioWhatsApp: sentViaWhatsApp ? 'enviado' : 'link_gerado',
+      motivo: 'Disparo de teste da Roleta via painel web',
+      produtoImovel: testLead.produtoImovel,
+    });
 
     res.json({
       success: true,

@@ -169,4 +169,94 @@ export interface AuthorizedUser {
   isPermanentAdmin?: boolean;
 }
 
+export type LeadStage =
+  | 'novo'
+  | 'qualificado'
+  | 'roleta'
+  | 'em_atendimento'
+  | 'visita_agendada'
+  | 'proposta'
+  | 'fechado'
+  | 'perdido';
+
+export type LeadTemperatura = 'quente' | 'morno' | 'frio';
+
+export interface LeadNotaInterna {
+  id: string;
+  data: string;
+  autor: string;
+  texto: string;
+}
+
+export interface LeadDistribuicaoItem {
+  id: string;
+  brokerId: string;
+  brokerName: string;
+  brokerPhone: string;
+  data: string;
+  tipo: 'automatica_roleta' | 'manual_operador' | 'timeout_recuperacao' | 'redistribuicao';
+  statusEnvioWhatsApp: 'enviado' | 'link_gerado' | 'falha';
+}
+
+export interface PersistentLead {
+  id: string;
+  nome: string;
+  telefone: string;
+  email?: string;
+  tipoAtendimento: string;
+  produtoImovel: string;
+  observacoes: string;
+  initialMessage?: string;
+  origem: string;
+  status: string | LeadStage;
+  temperatura?: LeadTemperatura;
+  tags?: string[];
+  valorInteresse?: string;
+  createdAt: string;
+  updatedAt?: string;
+  assignedBroker?: {
+    id: string;
+    name: string;
+    phone: string;
+    assignedAt?: string;
+  };
+  rawStructuredText?: string;
+  trilhaNavegacao?: string[];
+  resumoNavegacao?: string;
+  historicoMensagens?: Array<{ role: string; content: string; timestamp: string }>;
+  notasInternas?: LeadNotaInterna[];
+  historicoDistribuicoes?: LeadDistribuicaoItem[];
+}
+
+export interface RoletaDistributionLog {
+  id: string;
+  timestamp: string;
+  leadId: string;
+  leadNome: string;
+  leadTelefone: string;
+  brokerId: string;
+  brokerNome: string;
+  brokerTelefone: string;
+  tipoDistribuicao: 'automatica_roleta' | 'manual_operador' | 'timeout_recuperacao' | 'redistribuicao';
+  statusEnvioWhatsApp: 'enviado' | 'link_gerado' | 'falha';
+  motivo?: string;
+  produtoImovel?: string;
+  tempoSLA?: string;
+}
+
+export interface RoletaStats {
+  totalDistribuicoes: number;
+  enviadosWhatsApp: number;
+  linksGerados: number;
+  falhas: number;
+  porTipo: {
+    automatica_roleta: number;
+    manual_operador: number;
+    timeout_recuperacao: number;
+    redistribuicao: number;
+  };
+  distribuicoesPorCorretor: Record<string, number>;
+}
+
+
 

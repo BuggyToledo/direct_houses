@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Users,
   Timer,
@@ -26,739 +26,836 @@ import {
   Check,
   Touchpad,
   Lock,
+  History,
+  FileSpreadsheet,
+  Trash2,
+  RefreshCw,
+  ExternalLink,
+  ChevronRight,
+  UserCheck,
+  AlertCircle,
+  Clock,
 } from 'lucide-react';
-import { Broker } from '../types';
+import { Broker, RoletaDistributionLog, RoletaStats } from '../types';
 
 interface RoletaViewProps {
   companyName: string;
 }
 
 export function RoletaView({ companyName }: RoletaViewProps) {
+  // Tabs: 'plantao' or 'history'
+  const [activeTab, setActiveTab] = useState<'plantao' | 'history'>('plantao');
+
+  // Roleta Rules States
   const [isPaused, setIsPaused] = useState(false);
   const [timeoutSeconds, setTimeoutSeconds] = useState(120);
   const [transbordoInteligente, setTransbordoInteligente] = useState(true);
   const [filtroRegiao, setFiltroRegiao] = useState(true);
   const [mascaramentoDlp, setMascaramentoDlp] = useState(true);
-  const [isSimulatingLead, setIsSimulatingLead] = useState(false);
-  const [simulationSuccess, setSimulationSuccess] = useState(false);
   const [acceptedSimulation, setAcceptedSimulation] = useState(false);
+
+  // Search & Filters for Corretores
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Initial list of plantonistas matching the Stitch mockup
-  const [corretores, setCorretores] = useState([
-    {
-      id: '1',
-      posicao: '#1',
-      nome: 'Marcos Vinicius',
-      telefone: '(21) 99344-1288',
-      especialidade: 'Barra & Recreio',
-      leadsHoje: 4,
-      sla: '1.8 min',
-      ativo: true,
-      avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuAhvMLsrEuIlzulz_VkahMZlGkAHqpWpYUYHcEh7uYtPgF1SnoKhaBrPHPpG82oj2CSP4cl3NCnPvqDS8f7qg2mjRka6L2RAHnot9-ff_9GW9pACOuGlnE0VZWFL9SJwokiAaK8Ra225TQXUb239GoebSfRlsM6ZpiNHus1C8kFVbJ3V74ErSoeztlg6nxdeurm6keAPcsgP4Xi_yUJQy_AKjvxlMMai6aeX7tPXwRZvdSriJpTlF3JNw',
-    },
-    {
-      id: '2',
-      posicao: '#2',
-      nome: 'Juliana Mendes',
-      telefone: '(21) 98765-4321',
-      especialidade: 'Zona Sul & Botafogo',
-      leadsHoje: 5,
-      sla: '2.1 min',
-      ativo: true,
-      avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuBxRvIka6Vc3cwbVxL3LViKXCjn7zsmrAn34OsGiHhqvkh0fnZyNqtMrKueTt-O7JybGodE0UIGs5lpOEr1iWZJU93MZ9GPVHyPRz-_BTacJDRpy3jVa1NfEKC1ThvyfHBi30TmZ5Jo0tPy4-0lViz0wMkQGb3zDVBI-dh9jNccWi_U_t0DUsFSmyAh2ckhevKBcv0Z1FWgpAeoczW903Rm__ReNmNFFS5DPMVusKYHQFtHNDz_e4_CJA',
-    },
-    {
-      id: '3',
-      posicao: '#3',
-      nome: 'Gabriel Silveira',
-      telefone: '(21) 99876-5432',
-      especialidade: 'Studios & Investimentos',
-      leadsHoje: 3,
-      sla: '1.5 min',
-      ativo: true,
-      avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuDv7MgQy-L7kzDL-yS1NH5yxki8nNkJkmFOs7aQr_0ku19mr3WBAmhyZlHDxglyLvU_pE_PN_19LY-y9HAQY00jCxxTIIaCzodkqswdyRMfbo8EmDVWinG_UvkLUwt9TVp0Tz7UneTW-OteqqKVkXMko4CaofTtauAorCT-YlQBRN8cPv_qekGkiOu1a1TFGpU5G5-8EroFLbgYRQzkMv5yciDqHUEN_XmTwQUoexkaqN8y942zoKTYLQ',
-    },
-    {
-      id: '4',
-      posicao: '#4',
-      nome: 'Patrícia Duarte',
-      telefone: '(21) 99122-3344',
-      especialidade: 'Leblon & Ipanema Luxo',
-      leadsHoje: 4,
-      sla: '2.9 min',
-      ativo: true,
-      avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuCA7Df3Bas9MVa-qc4cHEcDT12C1-COb_c6HMUhA9kPMuPpNBo1pZJ7f6y0F0bmAcRetXSFKv0HzJliPTEXHtYbgjoH-ayNasMpQgF97WtsR7cOVYp8ChrjXT4HQPDnLqa1dNVhnw4wgoy79ciucp6p-M3bIvG6aBW48Nvl2TxsGDrIUlGlmNciy99tPS7lg65yd9XCjkVtuVILkRWuUijA8xrh4OdDi9giSDjjCb_xgwcCBWgmI87FQQ',
-    },
-    {
-      id: '5',
-      posicao: '#5',
-      nome: 'Fernando Rocha',
-      telefone: '(21) 98455-6677',
-      especialidade: 'Comercial & Salas',
-      leadsHoje: 2,
-      sla: '3.4 min',
-      ativo: true,
-      avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuAnVrwVx4Moh5VFNuSp897Ot7qsNKnpMw2Pv3Efp35WDWl_YPOPPNzjIJmfd6NFiqBqqKXE3wJcVivKjPCrmOYGd8f7CxknMnQhG088m5HrcZoqSRnGPedUhaRxDxht2sFlmNqNNG5Nx1VCUWkybbtzf7OyBfFs3I6v_BPNuBmp2iOJQ7L_CV0BxWN1Ek-fW-U9EDX_jViljsVGkoDa7wWXm0_dbcwT4FUvjRjecmbG_UnlLrGqmKoWPA',
-    },
-    {
-      id: '6',
-      posicao: '#--',
-      nome: 'Rodrigo Alencar',
-      telefone: '(21) 97788-9900',
-      especialidade: 'Lançamentos Gerais',
-      leadsHoje: 0,
-      sla: 'Ausente',
-      ativo: false,
-      avatar: null,
-    },
-  ]);
+  // Brokers list from server
+  const [brokers, setBrokers] = useState<Broker[]>([]);
+  const [isLoadingBrokers, setIsLoadingBrokers] = useState(false);
 
-  const toggleCorretorAtivo = (id: string) => {
-    setCorretores((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, ativo: !c.ativo } : c))
+  // Roleta History States
+  const [historyLogs, setHistoryLogs] = useState<RoletaDistributionLog[]>([]);
+  const [historyStats, setHistoryStats] = useState<RoletaStats | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyBrokerFilter, setHistoryBrokerFilter] = useState('all');
+  const [historyStatusFilter, setHistoryStatusFilter] = useState('all');
+  const [historyTypeFilter, setHistoryTypeFilter] = useState('all');
+
+  // Test Dispatch
+  const [isDispatchingTest, setIsDispatchingTest] = useState(false);
+  const [testResultNotice, setTestResultNotice] = useState<string | null>(null);
+
+  // Fetch brokers from API
+  const fetchBrokers = useCallback(async () => {
+    try {
+      setIsLoadingBrokers(true);
+      const res = await fetch('/api/brokers');
+      if (res.ok) {
+        const data = await res.json();
+        setBrokers(data);
+      }
+    } catch (err) {
+      console.error('Erro ao buscar corretores:', err);
+    } finally {
+      setIsLoadingBrokers(false);
+    }
+  }, []);
+
+  // Fetch history and stats from API
+  const fetchHistory = useCallback(async () => {
+    try {
+      setIsLoadingHistory(true);
+      const res = await fetch('/api/roleta/history?limit=100');
+      if (res.ok) {
+        const data = await res.json();
+        setHistoryLogs(data.history || []);
+        setHistoryStats(data.stats || null);
+      }
+    } catch (err) {
+      console.error('Erro ao buscar histórico da roleta:', err);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchBrokers();
+    fetchHistory();
+  }, [fetchBrokers, fetchHistory]);
+
+  // Toggle broker active status
+  const handleToggleBrokerActive = async (broker: Broker) => {
+    try {
+      const updated = { ...broker, active: !broker.active };
+      const res = await fetch('/api/brokers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated),
+      });
+      if (res.ok) {
+        setBrokers((prev) => prev.map((b) => (b.id === broker.id ? updated : b)));
+      }
+    } catch (err) {
+      console.error('Erro ao atualizar corretor:', err);
+    }
+  };
+
+  // Trigger test dispatch
+  const handleTriggerTestDispatch = async (targetBrokerId?: string) => {
+    try {
+      setIsDispatchingTest(true);
+      setTestResultNotice(null);
+      const res = await fetch('/api/roleta/test-dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brokerId: targetBrokerId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTestResultNotice(
+          `Disparo realizado com sucesso para ${data.broker?.name || 'corretor sorteado'}!`
+        );
+        fetchHistory();
+        fetchBrokers();
+        setTimeout(() => setTestResultNotice(null), 5000);
+      }
+    } catch (err) {
+      console.error('Erro no disparo de teste:', err);
+    } finally {
+      setIsDispatchingTest(false);
+    }
+  };
+
+  // Clear history
+  const handleClearHistory = async () => {
+    if (!window.confirm('Tem certeza que deseja zerar o histórico de distribuição da roleta?')) {
+      return;
+    }
+    try {
+      const res = await fetch('/api/roleta/history', { method: 'DELETE' });
+      if (res.ok) {
+        fetchHistory();
+      }
+    } catch (err) {
+      console.error('Erro ao limpar histórico:', err);
+    }
+  };
+
+  // Filtered brokers
+  const filteredBrokers = useMemo(() => {
+    return brokers.filter(
+      (b) =>
+        b.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        b.phone.includes(searchTerm) ||
+        (b.email && b.email.toLowerCase().includes(searchTerm.toLowerCase()))
     );
+  }, [brokers, searchTerm]);
+
+  // Filtered history logs
+  const filteredHistoryLogs = useMemo(() => {
+    return historyLogs.filter((log) => {
+      const matchSearch =
+        historySearch === '' ||
+        log.leadNome.toLowerCase().includes(historySearch.toLowerCase()) ||
+        log.leadTelefone.includes(historySearch) ||
+        log.brokerNome.toLowerCase().includes(historySearch.toLowerCase()) ||
+        (log.produtoImovel && log.produtoImovel.toLowerCase().includes(historySearch.toLowerCase()));
+
+      const matchBroker =
+        historyBrokerFilter === 'all' || log.brokerNome.toLowerCase().includes(historyBrokerFilter.toLowerCase());
+
+      const matchStatus =
+        historyStatusFilter === 'all' || log.statusEnvioWhatsApp === historyStatusFilter;
+
+      const matchType =
+        historyTypeFilter === 'all' || log.tipoDistribuicao === historyTypeFilter;
+
+      return matchSearch && matchBroker && matchStatus && matchType;
+    });
+  }, [historyLogs, historySearch, historyBrokerFilter, historyStatusFilter, historyTypeFilter]);
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'enviado':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+            <Check className="w-3 h-3 text-emerald-600" />
+            WhatsApp Enviado
+          </span>
+        );
+      case 'link_gerado':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-800 border border-blue-200">
+            Link Direto Gerado
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-800 border border-rose-200">
+            Falha
+          </span>
+        );
+    }
   };
 
-  const handleSimulateLead = () => {
-    setIsSimulatingLead(true);
-    setSimulationSuccess(false);
-    setTimeout(() => {
-      setIsSimulatingLead(false);
-      setSimulationSuccess(true);
-      setTimeout(() => setSimulationSuccess(false), 4000);
-    }, 1200);
+  const getTypeLabel = (type: string) => {
+    switch (type) {
+      case 'automatica_roleta':
+        return 'Roleta Automática';
+      case 'manual_operador':
+        return 'Repasse Manual';
+      case 'timeout_recuperacao':
+        return 'Transbordo Timeout';
+      case 'redistribuicao':
+        return 'Redistribuição';
+      default:
+        return type;
+    }
   };
-
-  const filteredCorretores = corretores.filter(
-    (c) =>
-      c.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.especialidade.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.telefone.includes(searchTerm)
-  );
 
   return (
     <div className="w-full flex flex-col gap-6 max-w-[1720px] mx-auto">
-      {/* Header de Controle da Roleta */}
-      <header className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-white p-5 sm:p-6 rounded-xl border border-slate-200/80 shadow-xs">
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-semibold">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              {isPaused ? 'Roleta Pausada' : 'Roleta Ativa em Tempo Real'}
+      {/* 1. Header & Navigation Tabs */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-4 sm:p-5 rounded-xl border border-slate-200/80 shadow-xs">
+        <div>
+          <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+            <span>Roleta de Corretores & Distribuição de Leads</span>
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 font-semibold">
+              Algoritmo Round-Robin Ativo
             </span>
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-800 border border-blue-200 text-xs font-medium">
-              <Timer className="w-3.5 h-3.5" />
-              Automático com Timeout de {timeoutSeconds}s
-            </span>
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs">
-              <Shield className="w-3.5 h-3.5 text-rose-500" />
-              DLP & Proteção Ativa
-            </span>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-bold font-display text-slate-900 tracking-tight">
-            Roleta Inteligente de Corretores
           </h1>
-          <p className="text-sm text-slate-500">
-            Distribuição equitativa Round-Robin com checagem de geolocalização e transbordo por inatividade no WhatsApp.
+          <p className="text-xs text-slate-500 mt-1">
+            Distribuição balanceada, SLA auditado e histórico completo de repasses para WhatsApp
           </p>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
+        {/* Tab Switcher */}
+        <div className="inline-flex p-1 rounded-xl bg-slate-100 border border-slate-200 self-start sm:self-auto">
           <button
             type="button"
-            onClick={() => setIsPaused(!isPaused)}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer shadow-2xs border ${
-              isPaused
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
-                : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+            onClick={() => setActiveTab('plantao')}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              activeTab === 'plantao'
+                ? 'bg-white text-blue-600 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            {isPaused ? <PlayCircle className="w-4 h-4" /> : <PauseCircle className="w-4 h-4 text-rose-600" />}
-            <span>{isPaused ? 'Retomar Roleta Geral' : 'Pausar Roleta Geral'}</span>
+            <Users className="w-4 h-4" />
+            <span>Plantão & Corretores ({brokers.length})</span>
           </button>
-
           <button
             type="button"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
+            onClick={() => setActiveTab('history')}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              activeTab === 'history'
+                ? 'bg-white text-blue-600 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
           >
-            <SlidersHorizontal className="w-4 h-4" />
-            <span>Configurações de Regra</span>
+            <History className="w-4 h-4" />
+            <span>Histórico de Distribuição ({historyLogs.length})</span>
           </button>
+        </div>
+      </div>
 
+      {/* Test Notice */}
+      {testResultNotice && (
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center justify-between shadow-xs animate-fadeIn">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <span>{testResultNotice}</span>
+          </div>
           <button
             type="button"
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-all cursor-pointer shadow-xs"
+            onClick={() => setTestResultNotice(null)}
+            className="text-emerald-700 hover:text-emerald-900"
           >
-            <UserPlus className="w-4 h-4 text-emerald-400" />
-            <span>Adicionar Corretor</span>
+            ✕
           </button>
         </div>
-      </header>
+      )}
 
-      {/* Barra de Métricas de Distribuição de Leads */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {/* KPI 1: Conectados no Plantão */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Conectados no Plantão
-            </span>
-            <div className="p-2 rounded-lg bg-blue-50 text-blue-600">
-              <Users className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-3xl font-bold font-display text-slate-900">12</span>
-              <span className="text-sm font-medium text-slate-400">/ 16</span>
-            </div>
-            <div className="flex items-center gap-2 mt-2">
-              <span className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden flex">
-                <span className="h-full bg-blue-600 rounded-full" style={{ width: '75%' }}></span>
-              </span>
-              <span className="text-xs font-bold text-slate-700">75%</span>
-            </div>
-          </div>
-        </div>
-
-        {/* KPI 2: Leads Distribuídos Hoje */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Leads Distribuídos Hoje
-            </span>
-            <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600">
-              <Inbox className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-3xl font-bold font-display text-slate-900">48</span>
-              <span className="text-xs font-bold text-emerald-600">+18.4% vs ontem</span>
-            </div>
-            <div className="flex items-center gap-1.5 mt-2 text-xs text-slate-500">
-              <Timer className="w-3.5 h-3.5 text-slate-400" />
-              <span>Último lead repassado há 3 min</span>
-            </div>
-          </div>
-        </div>
-
-        {/* KPI 3: Primeiro Contato (SLA) */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Primeiro Contato (SLA)
-            </span>
-            <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600">
-              <Gauge className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-3xl font-bold font-display text-slate-900">2m 14s</span>
-              <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                Ótimo
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5 mt-2 text-xs text-slate-500">
-              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-              <span>Alvo comercial máx: 05 min</span>
-            </div>
-          </div>
-        </div>
-
-        {/* KPI 4: Aceite Imediato WhatsApp */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Aceite Imediato WhatsApp
-            </span>
-            <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600">
-              <CheckCircle2 className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-3xl font-bold font-display text-slate-900">94.2%</span>
-              <span className="text-xs font-medium text-rose-600">3 transbordos</span>
-            </div>
-            <div className="flex items-center gap-1.5 mt-2 text-xs text-slate-500">
-              <RotateCw className="w-3.5 h-3.5 text-slate-400" />
-              <span>Zero leads perdidos por SLA</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Fila Circular / Próximo na Fila & Configurações Rápidas */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Card Próximo na Vez (4 colunas desktop) */}
-        <div className="lg:col-span-4 bg-slate-900 text-white rounded-xl p-6 shadow-md relative overflow-hidden flex flex-col justify-between border border-slate-800">
-          <div className="absolute -right-10 -top-10 w-40 h-40 rounded-full bg-blue-600/15 blur-2xl pointer-events-none"></div>
-
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <span className="inline-flex items-center gap-1 text-emerald-300 bg-emerald-950/80 border border-emerald-800 px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
-                <Flame className="w-3.5 h-3.5 text-emerald-400" />
-                Próximo na Vez de Receber Lead
-              </span>
-              <span className="text-slate-400 text-xs font-semibold">Posição #1</span>
-            </div>
-
-            <div className="flex items-start gap-4 mt-2">
-              <div className="relative shrink-0">
-                <img
-                  src={corretores[0].avatar}
-                  alt={corretores[0].nome}
-                  referrerPolicy="no-referrer"
-                  className="w-16 h-16 rounded-xl object-cover ring-2 ring-blue-500 shadow-md"
-                />
-                <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full ring-2 ring-slate-900"></span>
-              </div>
-              <div className="flex flex-col min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <h2 className="text-lg font-bold text-white truncate">{corretores[0].nome}</h2>
-                  <CheckCircle2 className="w-4 h-4 text-blue-400 shrink-0" />
-                </div>
-                <span className="text-xs text-slate-300">Senior Broker • Barra da Tijuca & Recreio</span>
-                <span className="text-xs text-slate-400 mt-1 flex items-center gap-1 font-mono">
-                  <Phone className="w-3.5 h-3.5 text-emerald-400" />
-                  {corretores[0].telefone}
+      {/* 2. TAB: HISTÓRICO DE DISTRIBUIÇÃO */}
+      {activeTab === 'history' && (
+        <div className="flex flex-col gap-6">
+          {/* Métricas do Histórico */}
+          <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  Total de Distribuições
                 </span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 mt-5 bg-slate-800/60 p-3 rounded-lg border border-slate-700/50">
-              <div className="flex flex-col">
-                <span className="text-xs text-slate-400">Leads Hoje</span>
-                <span className="text-lg font-bold text-white">4 Leads</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-xs text-slate-400">Meta Diária</span>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-lg font-bold text-white">80%</span>
-                  <span className="text-xs text-emerald-400 font-semibold">(4/5)</span>
+                <div className="p-2 rounded-lg bg-blue-50 text-blue-600">
+                  <RotateCw className="w-5 h-5" />
                 </div>
               </div>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="text-3xl font-bold font-display text-slate-900">
+                  {historyStats?.totalDistribuicoes || historyLogs.length}
+                </span>
+                <span className="text-xs text-slate-500">Leads repassados</span>
+              </div>
+              <div className="mt-2 text-xs text-slate-500">
+                Auditoria permanente gravada no servidor
+              </div>
             </div>
 
-            <div className="mt-4 flex items-center justify-between text-xs text-slate-400">
-              <span className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                Disponível & Online (WhatsApp Web)
-              </span>
-              <span>Tempo de resposta: 1.8 min</span>
-            </div>
-          </div>
-
-          <div className="mt-6 pt-4 border-t border-slate-800">
-            <button
-              type="button"
-              onClick={handleSimulateLead}
-              disabled={isSimulatingLead}
-              className="w-full py-2.5 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:opacity-70"
-            >
-              {isSimulatingLead ? (
-                <>
-                  <RotateCw className="w-4 h-4 animate-spin" />
-                  <span>Disparando Lead via API...</span>
-                </>
-              ) : simulationSuccess ? (
-                <>
-                  <Check className="w-4 h-4 text-emerald-300" />
-                  <span>Lead Enviado para Marcos V.!</span>
-                </>
-              ) : (
-                <>
-                  <Send className="w-4 h-4" />
-                  <span>Simular Envio de Lead Imediato</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Mini Visualizador de Distribuição em Tempo Real (8 colunas desktop) */}
-        <div className="lg:col-span-8 bg-white rounded-xl p-6 border border-slate-200/80 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">Fluxo Sequencial de Distribuição</h2>
-              <p className="text-xs text-slate-500">Próximos corretores alinhados na esteira de atendimento</p>
-            </div>
-            <div className="flex items-center gap-1 text-xs text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg">
-              <RotateCw className="w-3.5 h-3.5 text-blue-600" />
-              <span>Regra: Menor Carga + Maior SLA</span>
-            </div>
-          </div>
-
-          {/* Fila Dinâmica Cards Horizontais */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 my-2">
-            {/* 1st in line */}
-            <div className="p-3 rounded-lg bg-blue-50/70 border border-blue-200 flex flex-col justify-between">
+            <div className="bg-white p-5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
               <div className="flex items-center justify-between">
-                <span className="px-2 py-0.5 rounded bg-slate-900 text-white text-[10px] font-bold">
-                  #1 da Vez
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  Entregues via WhatsApp
                 </span>
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600">
+                  <MessageSquare className="w-5 h-5" />
+                </div>
               </div>
-              <div className="my-2">
-                <p className="text-sm font-bold text-slate-900 truncate">Marcos V.</p>
-                <p className="text-xs text-slate-500">4 leads hoje</p>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="text-3xl font-bold font-display text-emerald-600">
+                  {historyStats?.enviadosWhatsApp ||
+                    historyLogs.filter((l) => l.statusEnvioWhatsApp === 'enviado').length}
+                </span>
+                <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+                  100% Notificados
+                </span>
               </div>
-              <span className="text-xs text-blue-700 font-semibold">Espera: 0s (Próximo)</span>
+              <div className="mt-2 text-xs text-slate-500">
+                Disparo instantâneo pelo Baileys Engine
+              </div>
             </div>
 
-            {/* 2nd in line */}
-            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-col justify-between">
+            <div className="bg-white p-5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
               <div className="flex items-center justify-between">
-                <span className="px-2 py-0.5 rounded bg-slate-200 text-slate-800 text-[10px] font-semibold">
-                  #2 da Vez
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  Links de Atendimento
                 </span>
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600">
+                  <ExternalLink className="w-5 h-5" />
+                </div>
               </div>
-              <div className="my-2">
-                <p className="text-sm font-bold text-slate-900 truncate">Juliana M.</p>
-                <p className="text-xs text-slate-500">5 leads hoje</p>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="text-3xl font-bold font-display text-slate-900">
+                  {historyStats?.linksGerados ||
+                    historyLogs.filter((l) => l.statusEnvioWhatsApp === 'link_gerado').length}
+                </span>
+                <span className="text-xs text-slate-500">Links de contingência</span>
               </div>
-              <span className="text-xs text-slate-500">SLA: 2.1 min</span>
+              <div className="mt-2 text-xs text-slate-500">
+                Permite acionamento manual em 1 clique
+              </div>
             </div>
 
-            {/* 3rd in line */}
-            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-col justify-between">
+            <div className="bg-white p-5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
               <div className="flex items-center justify-between">
-                <span className="px-2 py-0.5 rounded bg-slate-200 text-slate-800 text-[10px] font-semibold">
-                  #3 da Vez
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  Taxa de Aceite / SLA
                 </span>
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <div className="p-2 rounded-lg bg-purple-50 text-purple-600">
+                  <Timer className="w-5 h-5" />
+                </div>
               </div>
-              <div className="my-2">
-                <p className="text-sm font-bold text-slate-900 truncate">Gabriel S.</p>
-                <p className="text-xs text-slate-500">3 leads hoje</p>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="text-3xl font-bold font-display text-slate-900">1.8 min</span>
+                <span className="text-xs font-bold text-emerald-600">Tempo médio</span>
               </div>
-              <span className="text-xs text-slate-500">SLA: 1.5 min</span>
-            </div>
-
-            {/* 4th in line */}
-            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-col justify-between">
-              <div className="flex items-center justify-between">
-                <span className="px-2 py-0.5 rounded bg-slate-200 text-slate-800 text-[10px] font-semibold">
-                  #4 da Vez
-                </span>
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-              </div>
-              <div className="my-2">
-                <p className="text-sm font-bold text-slate-900 truncate">Patrícia D.</p>
-                <p className="text-xs text-slate-500">4 leads hoje</p>
-              </div>
-              <span className="text-xs text-slate-500">SLA: 2.9 min</span>
-            </div>
-          </div>
-
-          {/* Quick Notice */}
-          <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600 mt-2">
-            <div className="flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-blue-600 shrink-0" />
-              <span>A roleta compensa automaticamente corretores que sofreram transbordo sem culpa técnica.</span>
-            </div>
-            <a href="#" className="text-xs font-semibold text-blue-600 hover:underline shrink-0 ml-2">
-              Ver Histórico de Auditoria
-            </a>
-          </div>
-        </div>
-      </section>
-
-      {/* Seção Principal Dividida: Tabela de Corretores & Painel Lateral de Regras */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-        {/* Tabela Interativa da Equipe de Plantão (8 colunas) */}
-        <div className="xl:col-span-8 bg-white rounded-xl border border-slate-200/80 shadow-xs p-5 sm:p-6 flex flex-col gap-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">Equipe de Plantão Comercial</h2>
-              <span className="text-xs text-slate-500">
-                Habilite ou congele corretores na fila sem desconfigurar as métricas históricas.
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Filtrar corretor..."
-                  className="h-9 pl-9 pr-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 w-48"
-                />
-              </div>
-              <button
-                type="button"
-                className="h-9 px-3 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1 cursor-pointer"
-              >
-                <Filter className="w-3.5 h-3.5" />
-                <span>Regiões</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Tabela */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50 text-slate-500 text-[11px] uppercase tracking-wider font-semibold border-y border-slate-200">
-                  <th className="py-3 px-3">Fila</th>
-                  <th className="py-3 px-3">Corretor</th>
-                  <th className="py-3 px-3">Especialidade</th>
-                  <th className="py-3 px-3 text-center">Leads Hoje</th>
-                  <th className="py-3 px-3 text-center">Tempo SLA</th>
-                  <th className="py-3 px-3 text-center">Status Plantão</th>
-                  <th className="py-3 px-3 text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-sm text-slate-900">
-                {filteredCorretores.map((corretor) => (
-                  <tr
-                    key={corretor.id}
-                    className={`hover:bg-slate-50/70 transition-colors ${
-                      !corretor.ativo ? 'opacity-60 bg-slate-50/40' : ''
-                    }`}
-                  >
-                    <td className="py-3 px-3 font-bold text-blue-600">{corretor.posicao}</td>
-                    <td className="py-3 px-3">
-                      <div className="flex items-center gap-2.5">
-                        {corretor.avatar ? (
-                          <img
-                            src={corretor.avatar}
-                            alt={corretor.nome}
-                            referrerPolicy="no-referrer"
-                            className="w-8 h-8 rounded-full object-cover shadow-2xs"
-                          />
-                        ) : (
-                          <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-xs font-bold">
-                            RA
-                          </div>
-                        )}
-                        <div className="flex flex-col min-w-0">
-                          <span className="font-semibold text-slate-900 leading-tight">
-                            {corretor.nome}
-                          </span>
-                          <span className="text-xs text-slate-500 flex items-center gap-1 font-mono">
-                            <MessageSquare className="w-3 h-3 text-emerald-600" />
-                            {corretor.telefone}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-3 px-3">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-medium border border-slate-200">
-                        {corretor.especialidade}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 text-center font-semibold text-xs">
-                      {corretor.leadsHoje} Leads
-                    </td>
-                    <td className="py-3 px-3 text-center">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
-                          corretor.sla === 'Ausente'
-                            ? 'bg-slate-100 text-slate-500'
-                            : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                        }`}
-                      >
-                        {corretor.sla}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 text-center">
-                      <button
-                        type="button"
-                        onClick={() => toggleCorretorAtivo(corretor.id)}
-                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                          corretor.ativo ? 'bg-blue-600' : 'bg-slate-300'
-                        }`}
-                      >
-                        <span
-                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
-                            corretor.ativo ? 'translate-x-5' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                    </td>
-                    <td className="py-3 px-3 text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          type="button"
-                          className="p-1 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer"
-                          title="Enviar WhatsApp Teste"
-                        >
-                          <Send className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          className="p-1 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800 cursor-pointer"
-                          title="Configurações Individuais"
-                        >
-                          <MoreVertical className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="flex items-center justify-between pt-2 text-xs text-slate-500 border-t border-slate-100">
-            <span>Exibindo {filteredCorretores.length} corretores na visão de plantão.</span>
-            <span className="px-2 py-1 rounded bg-slate-100 font-semibold text-slate-700">
-              Balanceamento Automático: ON
-            </span>
-          </div>
-        </div>
-
-        {/* Painel Lateral: Regras da Roleta & Automação do WhatsApp (4 colunas) */}
-        <div className="xl:col-span-4 flex flex-col gap-6">
-          {/* Card Configurações de Transbordo */}
-          <div className="bg-white rounded-xl p-5 sm:p-6 border border-slate-200/80 shadow-xs flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Timer className="w-5 h-5 text-blue-600" />
-                <h3 className="text-base font-bold text-slate-900">Regras de Timeout & Transbordo</h3>
-              </div>
-              <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                Ativo
-              </span>
-            </div>
-
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Tempo máximo de tolerância para o corretor confirmar leitura no WhatsApp antes do lead ser automaticamente repassado para o próximo da fila.
-            </p>
-
-            {/* Slider Interativo */}
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-700">Tempo Limite para Aceite:</span>
-                <span className="text-sm font-bold text-blue-600">{timeoutSeconds} segundos</span>
-              </div>
-              <input
-                type="range"
-                min={30}
-                max={300}
-                step={15}
-                value={timeoutSeconds}
-                onChange={(e) => setTimeoutSeconds(Number(e.target.value))}
-                className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-              />
-              <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
-                <span>30s (Ultra-rápido)</span>
-                <span>120s (Padrão)</span>
-                <span>300s (5 min)</span>
+              <div className="mt-2 text-xs text-slate-500">
+                Transbordo configurado para <strong>{timeoutSeconds}s</strong>
               </div>
             </div>
+          </section>
 
-            {/* Checkboxes Estilizados */}
-            <div className="flex flex-col gap-3 pt-1">
-              <label className="flex items-start gap-2.5 cursor-pointer text-xs text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={transbordoInteligente}
-                  onChange={(e) => setTransbordoInteligente(e.target.checked)}
-                  className="mt-0.5 rounded text-blue-600 focus:ring-blue-500"
-                />
-                <span>
-                  <strong className="font-semibold text-slate-900">Transbordo Inteligente:</strong>{' '}
-                  Repassar imediatamente ao detectar status "Ausente" ou esgotamento do SLA de {timeoutSeconds}s.
-                </span>
-              </label>
-
-              <label className="flex items-start gap-2.5 cursor-pointer text-xs text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={filtroRegiao}
-                  onChange={(e) => setFiltroRegiao(e.target.checked)}
-                  className="mt-0.5 rounded text-blue-600 focus:ring-blue-500"
-                />
-                <span>
-                  <strong className="font-semibold text-slate-900">Filtro Rígido por Região:</strong>{' '}
-                  Priorizar corretores credenciados para a zona do empreendimento antes de abrir para a fila geral.
-                </span>
-              </label>
-
-              <label className="flex items-start gap-2.5 cursor-pointer text-xs text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={mascaramentoDlp}
-                  onChange={(e) => setMascaramentoDlp(e.target.checked)}
-                  className="mt-0.5 rounded text-blue-600 focus:ring-blue-500"
-                />
-                <span>
-                  <strong className="font-semibold text-slate-900">Mascaração DLP WhatsApp:</strong>{' '}
-                  Exibir dados completos de contato apenas após a confirmação expressa de atendimento.
-                </span>
-              </label>
-            </div>
-          </div>
-
-          {/* Preview Real da Mensagem no WhatsApp */}
-          <div className="bg-white rounded-xl p-5 sm:p-6 border border-slate-200/80 shadow-xs flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <MessageSquare className="w-5 h-5 text-emerald-600" />
-                <h3 className="text-base font-bold text-slate-900">Preview da Mensagem no WhatsApp</h3>
-              </div>
-              <span className="text-[11px] text-slate-400">Instância Oficial</span>
-            </div>
-
-            <p className="text-xs text-slate-500">
-              Formato exato disparado via API oficial no WhatsApp do corretor sorteado na roleta:
-            </p>
-
-            {/* Mock WhatsApp Bubble */}
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs flex flex-col gap-2.5 shadow-2xs">
-              <div className="flex items-center justify-between text-slate-500 pb-1 border-b border-slate-200">
-                <span className="font-bold text-blue-700 text-[11px]">
-                  {companyName.toUpperCase()} • BOT DE DISTRIBUIÇÃO
-                </span>
-                <span className="text-[10px]">Agora</span>
+          {/* Filtros e Ações do Histórico */}
+          <div className="bg-white p-4 sm:p-5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col gap-4">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-sm font-bold text-slate-900">
+                  Logs de Distribuição da Roleta ({filteredHistoryLogs.length})
+                </h3>
+                <span className="text-xs text-slate-500">• Ordem cronológica decrescente</span>
               </div>
 
-              <p className="text-slate-800 leading-relaxed font-medium">
-                🚀 <strong>NOVO LEAD EXCLUSIVO DISPONÍVEL NA ROLETA!</strong><br />
-                Você tem <strong>{timeoutSeconds} segundos</strong> para aceitar este atendimento.
-              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <a
+                  href="/api/roleta/history/export/csv"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3.5 py-2 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 flex items-center gap-1.5 transition-all shadow-2xs"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                  <span>Exportar Histórico (CSV)</span>
+                </a>
 
-              <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-1 text-slate-700 font-sans">
-                <div>👤 <strong>Cliente:</strong> Dr. Henrique Albuquerque</div>
-                <div>🏢 <strong>Interesse:</strong> Península Mandarim (4 Quartos - Barra)</div>
-                <div>💰 <strong>Ticket Estimado:</strong> R$ 3.850.000,00</div>
-                <div>🎯 <strong>Canal de Origem:</strong> Tráfego Pago / Instagram Ads</div>
-                <div>🛡️ <strong>DLP Status:</strong> Lead qualificado & Auditado</div>
-              </div>
-
-              <p className="text-slate-500 text-[11px] italic">
-                Responda <strong>"ACEITAR"</strong> neste chat para desbloquear o número de telefone e transferir a conversa diretamente para o seu aparelho.
-              </p>
-
-              <div className="pt-1">
                 <button
                   type="button"
-                  onClick={() => setAcceptedSimulation(!acceptedSimulation)}
-                  className={`w-full py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs ${
-                    acceptedSimulation
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-blue-600 hover:bg-blue-700 text-white'
-                  }`}
+                  onClick={() => handleTriggerTestDispatch()}
+                  disabled={isDispatchingTest}
+                  className="px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
                 >
-                  <Check className="w-4 h-4" />
-                  <span>
-                    {acceptedSimulation
-                      ? '✓ Atendimento Aceito por Marcos Vinicius!'
-                      : '[SIMULAÇÃO] Simular Clique em ACEITAR'}
-                  </span>
+                  <Send className={`w-3.5 h-3.5 ${isDispatchingTest ? 'animate-spin' : ''}`} />
+                  <span>{isDispatchingTest ? 'Disparando...' : 'Disparo de Teste'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleClearHistory}
+                  className="p-2 rounded-lg bg-slate-50 hover:bg-rose-50 text-slate-500 hover:text-rose-600 border border-slate-200 transition-colors cursor-pointer text-xs"
+                  title="Limpar Histórico"
+                >
+                  <Trash2 className="w-4 h-4" />
                 </button>
               </div>
             </div>
+
+            {/* Inputs de Filtro */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 pt-2 border-t border-slate-100">
+              <div className="lg:col-span-5 relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Buscar por lead, telefone, corretor ou imóvel..."
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  className="w-full h-9 pl-9 pr-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="lg:col-span-3">
+                <select
+                  value={historyBrokerFilter}
+                  onChange={(e) => setHistoryBrokerFilter(e.target.value)}
+                  className="w-full h-9 px-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">Todos os Corretores</option>
+                  {brokers.map((b) => (
+                    <option key={b.id} value={b.name}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="lg:col-span-2">
+                <select
+                  value={historyStatusFilter}
+                  onChange={(e) => setHistoryStatusFilter(e.target.value)}
+                  className="w-full h-9 px-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">Status WhatsApp</option>
+                  <option value="enviado">Enviado com Sucesso</option>
+                  <option value="link_gerado">Link Gerado</option>
+                  <option value="falha">Falha</option>
+                </select>
+              </div>
+
+              <div className="lg:col-span-2">
+                <select
+                  value={historyTypeFilter}
+                  onChange={(e) => setHistoryTypeFilter(e.target.value)}
+                  className="w-full h-9 px-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">Tipo de Distribuição</option>
+                  <option value="automatica_roleta">Roleta Automática</option>
+                  <option value="manual_operador">Repasse Manual</option>
+                  <option value="timeout_recuperacao">Timeout</option>
+                  <option value="redistribuicao">Redistribuição</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Tabela de Histórico */}
+          <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
+            {filteredHistoryLogs.length === 0 ? (
+              <div className="p-12 text-center flex flex-col items-center justify-center">
+                <History className="w-12 h-12 text-slate-300 mb-3" />
+                <h4 className="text-sm font-bold text-slate-800">Nenhum registro de distribuição</h4>
+                <p className="text-xs text-slate-500 mt-1 max-w-sm">
+                  Quando um lead for qualificado via WhatsApp e distribuído na roleta, cada repasse
+                  será auditado aqui em tempo real.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => handleTriggerTestDispatch()}
+                  className="mt-4 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+                >
+                  Disparar Teste Agora
+                </button>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                      <th className="py-3 px-4">Data / Hora</th>
+                      <th className="py-3 px-4">Lead (Cliente)</th>
+                      <th className="py-3 px-4">Imóvel de Interesse</th>
+                      <th className="py-3 px-4">Corretor Sorteado</th>
+                      <th className="py-3 px-4">Tipo Distribuição</th>
+                      <th className="py-3 px-4">Status WhatsApp</th>
+                      <th className="py-3 px-4">Motivo / SLA</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
+                    {filteredHistoryLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-slate-50/80 transition-colors">
+                        {/* Data / Hora */}
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            <span>{new Date(log.timestamp).toLocaleString('pt-BR')}</span>
+                          </div>
+                        </td>
+
+                        {/* Lead */}
+                        <td className="py-3 px-4">
+                          <div>
+                            <p className="font-bold text-slate-900">{log.leadNome}</p>
+                            <p className="text-slate-500 text-[11px] font-mono">
+                              {log.leadTelefone}
+                            </p>
+                          </div>
+                        </td>
+
+                        {/* Imóvel */}
+                        <td className="py-3 px-4">
+                          <span className="font-semibold text-slate-800">
+                            {log.produtoImovel || 'Lançamento Geral'}
+                          </span>
+                        </td>
+
+                        {/* Corretor */}
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-2">
+                            <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <div>
+                              <p className="font-semibold text-slate-900">{log.brokerNome}</p>
+                              <p className="text-slate-400 text-[10px] font-mono">
+                                {log.brokerTelefone}
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Tipo */}
+                        <td className="py-3 px-4">
+                          <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-medium border border-slate-200">
+                            {getTypeLabel(log.tipoDistribuicao)}
+                          </span>
+                        </td>
+
+                        {/* Status WhatsApp */}
+                        <td className="py-3 px-4">{getStatusBadge(log.statusEnvioWhatsApp)}</td>
+
+                        {/* Motivo / SLA */}
+                        <td className="py-3 px-4">
+                          <p className="text-slate-600 text-[11px] max-w-xs truncate">
+                            {log.motivo || 'Roleta automática'}
+                          </p>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
-      </div>
+      )}
+
+      {/* 3. TAB: PLANTÃO & REGRAS DA ROLETA */}
+      {activeTab === 'plantao' && (
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+          {/* Tabela de Corretores (8 colunas) */}
+          <div className="xl:col-span-8 bg-white rounded-xl p-5 sm:p-6 border border-slate-200/80 shadow-xs flex flex-col gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  Fila Round-Robin de Plantão ({filteredBrokers.length})
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Ordem estrita de repasse. O próximo da fila receberá a notificação em tempo real.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsPaused(!isPaused)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs ${
+                    isPaused
+                      ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {isPaused ? <PlayCircle className="w-3.5 h-3.5" /> : <PauseCircle className="w-3.5 h-3.5" />}
+                  <span>{isPaused ? 'Retomar Roleta' : 'Pausar Roleta'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleTriggerTestDispatch()}
+                  disabled={isDispatchingTest}
+                  className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Simular Disparo Roleta</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Input de Busca */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Filtrar corretor por nome ou telefone..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full h-9 pl-9 pr-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            {/* Tabela de Corretores */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-2.5 px-3">Fila</th>
+                    <th className="py-2.5 px-3">Corretor</th>
+                    <th className="py-2.5 px-3">Telefone</th>
+                    <th className="py-2.5 px-3 text-center">Leads Recebidos</th>
+                    <th className="py-2.5 px-3 text-center">Status Plantão</th>
+                    <th className="py-2.5 px-3 text-right">Ação</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
+                  {filteredBrokers.map((broker, idx) => (
+                    <tr key={broker.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3 px-3 font-bold text-blue-700">
+                        {broker.active ? `#${idx + 1}` : '--'}
+                      </td>
+                      <td className="py-3 px-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-7 h-7 rounded-full bg-slate-200 font-bold flex items-center justify-center text-xs text-slate-700 shrink-0">
+                            {broker.name.charAt(0)}
+                          </div>
+                          <div>
+                            <span className="font-bold text-slate-900 block">{broker.name}</span>
+                            {broker.email && (
+                              <span className="text-[10px] text-slate-400">{broker.email}</span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-3 px-3 font-mono text-slate-600">{broker.phone}</td>
+                      <td className="py-3 px-3 text-center font-semibold">
+                        {broker.leadsReceived || 0} Leads
+                      </td>
+                      <td className="py-3 px-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleBrokerActive(broker)}
+                          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                            broker.active ? 'bg-blue-600' : 'bg-slate-300'
+                          }`}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                              broker.active ? 'translate-x-4' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      </td>
+                      <td className="py-3 px-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleTriggerTestDispatch(broker.id)}
+                          className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-blue-600 cursor-pointer"
+                          title="Enviar lead de teste para este corretor"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 text-xs text-slate-500 border-t border-slate-100">
+              <span>Exibindo {filteredBrokers.length} corretores cadastrados.</span>
+              <span className="px-2 py-1 rounded bg-slate-100 font-semibold text-slate-700">
+                Balanceamento Automático: ON
+              </span>
+            </div>
+          </div>
+
+          {/* Painel Lateral: Regras da Roleta & Automação (4 colunas) */}
+          <div className="xl:col-span-4 flex flex-col gap-6">
+            {/* Card Configurações de Transbordo */}
+            <div className="bg-white rounded-xl p-5 sm:p-6 border border-slate-200/80 shadow-xs flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Timer className="w-5 h-5 text-blue-600" />
+                  <h3 className="text-base font-bold text-slate-900">Timeout & Transbordo</h3>
+                </div>
+                <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                  Ativo
+                </span>
+              </div>
+
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Tempo máximo de tolerância para o corretor aceitar no WhatsApp antes de repassar
+                automaticamente para o próximo plantonista.
+              </p>
+
+              {/* Slider Interativo */}
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-700">Tempo Limite:</span>
+                  <span className="text-sm font-bold text-blue-600">{timeoutSeconds} segundos</span>
+                </div>
+                <input
+                  type="range"
+                  min={30}
+                  max={300}
+                  step={15}
+                  value={timeoutSeconds}
+                  onChange={(e) => setTimeoutSeconds(Number(e.target.value))}
+                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                />
+                <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+                  <span>30s (Ultra-rápido)</span>
+                  <span>120s (Padrão)</span>
+                  <span>300s (5 min)</span>
+                </div>
+              </div>
+
+              {/* Checkboxes */}
+              <div className="flex flex-col gap-3 pt-1">
+                <label className="flex items-start gap-2.5 cursor-pointer text-xs text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={transbordoInteligente}
+                    onChange={(e) => setTransbordoInteligente(e.target.checked)}
+                    className="mt-0.5 rounded text-blue-600 focus:ring-blue-500"
+                  />
+                  <span>
+                    <strong className="font-semibold text-slate-900">Transbordo Automático:</strong>{' '}
+                    Repassar se o corretor não responder no tempo estipulado.
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-2.5 cursor-pointer text-xs text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={filtroRegiao}
+                    onChange={(e) => setFiltroRegiao(e.target.checked)}
+                    className="mt-0.5 rounded text-blue-600 focus:ring-blue-500"
+                  />
+                  <span>
+                    <strong className="font-semibold text-slate-900">Priorizar Especialista da Região:</strong>{' '}
+                    Prioriza corretores credenciados no bairro do imóvel.
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-2.5 cursor-pointer text-xs text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={mascaramentoDlp}
+                    onChange={(e) => setMascaramentoDlp(e.target.checked)}
+                    className="mt-0.5 rounded text-blue-600 focus:ring-blue-500"
+                  />
+                  <span>
+                    <strong className="font-semibold text-slate-900">Mascaração DLP WhatsApp:</strong>{' '}
+                    Proteção contra desvio de comissão ou vazamento de dados.
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* Preview da Mensagem Disparada */}
+            <div className="bg-white rounded-xl p-5 sm:p-6 border border-slate-200/80 shadow-xs flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="w-5 h-5 text-emerald-600" />
+                  <h3 className="text-base font-bold text-slate-900">Preview do WhatsApp Oficial</h3>
+                </div>
+                <span className="text-[11px] text-slate-400">Instância Direct Houses</span>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs flex flex-col gap-2.5 shadow-2xs">
+                <div className="flex items-center justify-between text-slate-500 pb-1 border-b border-slate-200">
+                  <span className="font-bold text-blue-700 text-[11px]">
+                    {companyName.toUpperCase()} • ROLETA AUTOMÁTICA
+                  </span>
+                  <span className="text-[10px]">Agora</span>
+                </div>
+
+                <p className="text-slate-800 leading-relaxed font-medium">
+                  🚀 <strong>NOVO LEAD EXCLUSIVO DISPONÍVEL NA ROLETA!</strong><br />
+                  Você tem <strong>{timeoutSeconds} segundos</strong> para aceitar este atendimento.
+                </p>
+
+                <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-1 text-slate-700 font-sans">
+                  <div>👤 <strong>Cliente:</strong> Roberto Albuquerque</div>
+                  <div>🏢 <strong>Interesse:</strong> Reserva Jardim Barra (3 Quartos)</div>
+                  <div>💰 <strong>Ticket Estimado:</strong> R$ 1.450.000,00</div>
+                  <div>🎯 <strong>Origem:</strong> Anúncio Instagram Ads</div>
+                  <div>🛡️ <strong>DLP Status:</strong> Lead Auditado e Protegido</div>
+                </div>
+
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setAcceptedSimulation(!acceptedSimulation)}
+                    className={`w-full py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs ${
+                      acceptedSimulation
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-blue-600 hover:bg-blue-700 text-white'
+                    }`}
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>
+                      {acceptedSimulation
+                        ? '✓ Atendimento Aceito!'
+                        : 'Simular Aceite no WhatsApp'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
