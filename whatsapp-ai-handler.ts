@@ -128,18 +128,19 @@ function buildSystemPrompt(session: WhatsAppChatSession, companyName: string = '
   let currentStepDirective = '';
 
   if (!hasName) {
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 1 (NOME DO CLIENTE)
-- O cliente ainda não informou o nome.
-- Ação: Cumprimente cordialmente e pergunte o *nome completo*. Faça SOMENTE esta pergunta.`;
-  } else if (!hasPhone) {
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 2 (TELEFONE DO CLIENTE)
-- O cliente se chama "${session.name}".
-- Ação: ${
-      hasValidPhone
-        ? `Agradeça e confirme o número: "Muito prazer, ${session.name}! Identifiquei seu WhatsApp como ${displayPhone}. Este é o melhor telefone para contato ou prefere informar outro?"`
-        : `Agradeça e pergunte o número: "Muito prazer, ${session.name}! Qual é o seu número de WhatsApp com DDD para o corretor entrar em contato com você?"`
-    }
+    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 1 (SAUDAÇÃO & NOME DO CLIENTE)
+- O número de WhatsApp do cliente já foi identificado automaticamente como "${displayPhone}".
+- Ação: Cumprimente com simpatia, cite o WhatsApp já identificado e pergunte o *nome completo*:
+  "Olá! Seja muito bem-vindo(a) à ${companyName}. 🏡
+  Identifiquei seu WhatsApp como *${displayPhone}*.
+  Para começarmos, qual é o seu *nome completo*?"
 - Faça SOMENTE esta pergunta.`;
+  } else if (!hasPhone || userMsgs.length === 1) {
+    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 2 (CONFIRMAÇÃO DO NÚMERO IDENTIFICADO)
+- O cliente se chama "${session.name}" e o WhatsApp dele foi detectado automaticamente como "${displayPhone}".
+- Ação: Agradeça e confirme o número já identificado:
+  "Muito prazer, ${session.name}! Identifiquei seu WhatsApp como *${displayPhone}*. Este é o seu melhor telefone para contato ou prefere informar outro?"
+- Faça SOMENTE esta confirmação (NUNCA pergunte "qual seu telefone com DDD" do zero, pois já temos o número).`;
   } else if (!hasTipo) {
     const originImovelNotice = session.extractedLead.produtoImovel && session.extractedLead.produtoImovel !== 'A combinar com corretor' && session.extractedLead.produtoImovel !== 'Não informado'
       ? ` referente ao seu interesse no imóvel *${session.extractedLead.produtoImovel}*`
@@ -288,28 +289,37 @@ function getFallbackReply(
     }
   }
 
-  const hasValidPhone = isValidPhoneNumber(session.phone);
+  const displayPhone = hasValidPhone ? formatPhoneForDisplay(session.phone) : '';
 
   // 1. Initial Greeting
-  if (userMsgs.length === 1 && isGreetingOnly(lastUserMsg)) {
-    return (
-      `Olá! Seja muito bem-vindo(a) à *${companyName}*. 🏡\n\n` +
-      `Sou o assistente virtual da Direct Houses. Vou fazer algumas perguntas rápidas para entender o seu objetivo e direcionar ao corretor ideal.\n\n` +
-      `Para começarmos, qual é o seu *nome completo*?`
-    );
+  if (userMsgs.length === 1) {
+    if (session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name)) {
+      return (
+        `Olá, *${session.name}*! Seja muito bem-vindo(a) à *${companyName}*. 🏡\n\n` +
+        (displayPhone
+          ? `Identifiquei seu número de WhatsApp como *${displayPhone}*. Este é o seu melhor telefone para contato ou prefere informar outro?`
+          : `Para começarmos nosso atendimento, qual é o seu número de WhatsApp com DDD?`)
+      );
+    } else {
+      return (
+        `Olá! Seja muito bem-vindo(a) à *${companyName}*. 🏡\n\n` +
+        (displayPhone ? `Identifiquei seu WhatsApp como *${displayPhone}*.\n` : '') +
+        `Para começarmos nosso atendimento, qual é o seu *nome completo*?`
+      );
+    }
   }
 
-  // 2. Ask / Confirm Phone if not yet addressed
-  const phoneDiscussed =
-    userMsgs.length >= 2 &&
-    (extractPhoneFromText(lastUserMsg) ||
-      /\b(sim|este|esse|correto|pode ser|isso)\b/i.test(lastUserMsg) ||
-      hasValidPhone);
+  // 2. Confirm Phone if user just provided name
+  const phoneConfirmed =
+    /\b(sim|este|esse|correto|pode ser|isso|ok|beleza|perfeito|certo)\b/i.test(lastUserMsg) ||
+    extractPhoneFromText(lastUserMsg);
 
-  if (session.name !== 'Cliente' && !phoneDiscussed && !hasValidPhone) {
+  if (session.name !== 'Cliente' && !phoneConfirmed && userMsgs.length === 2) {
     return (
       `Muito prazer em falar com você, *${session.name}*! 😊\n\n` +
-      `Qual é o seu *número de WhatsApp com DDD* para o corretor entrar em contato com você?`
+      (displayPhone
+        ? `Identifiquei seu número de WhatsApp como *${displayPhone}*. Está correto para o corretor entrar em contato ou prefere informar outro?`
+        : `Qual é o seu número de WhatsApp com DDD para o corretor entrar em contato com você?`)
     );
   }
 

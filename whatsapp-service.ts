@@ -287,19 +287,37 @@ class WhatsAppService {
             msg.message.templateButtonReplyMessage?.selectedId ||
             '';
 
-          if (!messageText.trim()) continue;
-
           let senderPhone = '';
-          if (jid.endsWith('@s.whatsapp.net')) {
-            senderPhone = jid.split('@')[0].replace(/\D/g, '');
+          const rawJid = jid || '';
+
+          if (rawJid.includes('@s.whatsapp.net')) {
+            senderPhone = rawJid.split(':')[0].split('@')[0].replace(/\D/g, '');
           } else {
-            const participant =
-              msg.key.participant ||
-              (msg.key as any).participantPnJid ||
-              (msg.key as any).remoteJidPn ||
-              (msg as any).senderPnJid;
-            if (participant && typeof participant === 'string' && participant.endsWith('@s.whatsapp.net')) {
-              senderPhone = participant.split('@')[0].replace(/\D/g, '');
+            const possibleParticipants = [
+              msg.key.participant,
+              (msg.key as any).participantPnJid,
+              (msg.key as any).remoteJidPn,
+              (msg.key as any).senderPnJid,
+              (msg as any).senderPnJid,
+              (msg as any).participant,
+              (msg as any).senderPhoneNumber,
+            ];
+            for (const p of possibleParticipants) {
+              if (p && typeof p === 'string' && p.includes('@s.whatsapp.net')) {
+                senderPhone = p.split(':')[0].split('@')[0].replace(/\D/g, '');
+                break;
+              } else if (p && typeof p === 'string' && /^\+?[0-9]{8,14}$/.test(p.replace(/\D/g, ''))) {
+                senderPhone = p.replace(/\D/g, '');
+                break;
+              }
+            }
+          }
+
+          // Fallback: If still empty and jid has numbers resembling a phone (10-13 digits)
+          if (!senderPhone && !rawJid.endsWith('@g.us')) {
+            const digitsOnly = rawJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+            if (digitsOnly.length >= 10 && digitsOnly.length <= 13 && !digitsOnly.startsWith('192878')) {
+              senderPhone = digitsOnly;
             }
           }
 
