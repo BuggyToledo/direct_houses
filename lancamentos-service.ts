@@ -332,6 +332,8 @@ function normalizeLancamento(raw: any): Lancamento {
     fotos: raw.fotos ? String(raw.fotos).trim() : '',
     localidade: raw.localidade ? String(raw.localidade).trim() : '',
     vizinhanca: raw.vizinhanca ? String(raw.vizinhanca).trim() : '',
+    fotosUpload: Array.isArray(raw.fotosUpload) ? raw.fotosUpload : [],
+    bookPdfUpload: raw.bookPdfUpload || undefined,
     // Dados Nível 3 Internos
     construtora: raw.construtora ? String(raw.construtora).trim() : '',
     telefoneConstrutora: raw.telefoneConstrutora ? String(raw.telefoneConstrutora).trim() : '',

@@ -24,111 +24,296 @@ import {
   Sliders,
   Check,
   Cloud,
+  Loader2,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
-import { LancamentoItem } from './LancamentosModal';
+import { LancamentoItem, CatalogoStatus } from './LancamentosModal';
 
 interface LancamentosViewProps {
   companyName: string;
+  onLancamentosUpdated?: () => void;
 }
 
-export function LancamentosView({ companyName }: LancamentosViewProps) {
-  const [activeTab, setActiveTab] = useState<'editar' | 'empreendimentos' | 'governanca'>('editar');
+const fileToBase64 = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (error) => reject(error);
+  });
+};
+
+const DEFAULT_FORM_DATA = {
+  nome: 'Reserva Jardim Barra',
+  bairro: 'Barra da Tijuca',
+  cidade: 'Rio de Janeiro',
+  tipologias: '2 e 3 Quartos (Suíte) + Varanda Gourmet Integrada',
+  metragens: '84m² a 114m² privativos',
+  quartos: '2 e 3 quartos',
+  precoFaixa: 'A partir de R$ 980.000 (2Q) e R$ 1.450.000 (3Q)',
+  previsaoEntrega: 'Novembro de 2026',
+  condicoesComerciais: 'Entrada de 20% facilitada em 36x direto com a incorporadora + Financiamento Caixa/Itaú na entrega',
+  urlPublica: 'https://directhouses.com.br/lancamentos/reserva-jardim-barra',
+  descricao: 'O Reserva Jardim é o equilíbrio perfeito entre sofisticação contemporânea e contato genuíno com a natureza na Barra da Tijuca. Desenvolvido para famílias que priorizam segurança, conveniência e acabamentos nobres, o projeto conta com plantas amplas de 2 e 3 quartos com suíte, varanda gourmet 100% integrada ao living e mais de 4.000m² de lazer privativo tipo resort.',
+  localizacaoTags: [
+    'A 5 min do Shopping BarraShopping',
+    'Próximo à estação de BRT e Metrô Jardim Oceânico',
+    'Fácil acesso à Praia da Barra',
+  ],
+  lazerTags: [
+    'Piscina aquecida',
+    'Academia de 300m²',
+    'Espaço Coworking',
+    'Quadra de Beach Tennis',
+    'Pet Place',
+  ],
+  fotos: [] as Array<{ id: string; nome: string; url: string; tamanhoKb?: number }>,
+  bookPdf: null as { nome: string; tamanhoMb?: number; url: string } | null,
+  dlp: {
+    construtora: 'Cyrela RJ Participações S.A.',
+    contatoDiretor: 'Eng. Marcelo Castro (21) 98711-0099',
+    enderecoExato: 'Av. das Américas, Lote 14B - Matrícula RGI nº 148.922 - 9º Ofício',
+    comissao: 'Comissão Total 5.5% (Diretoria 1.5% / Corretor 4.0%)',
+    notasInternas: '',
+    dadosCadastrais: '',
+  },
+  status: 'ativo' as CatalogoStatus,
+};
+
+export function LancamentosView({ companyName, onLancamentosUpdated }: LancamentosViewProps) {
+  const [activeTab, setActiveTab] = useState<'editar' | 'empreendimentos' | 'governanca'>('empreendimentos');
   const [lancamentos, setLancamentos] = useState<LancamentoItem[]>([]);
-  const [selectedId, setSelectedId] = useState<string>('dh-8842');
+  const [selectedId, setSelectedId] = useState<string>('');
   const [isTestPromptOpen, setIsTestPromptOpen] = useState(false);
   const [testPromptInput, setTestPromptInput] = useState('Quem é a construtora do Reserva Jardim e qual o telefone do dono da obra?');
   const [uploadingFoto, setUploadingFoto] = useState(false);
   const [uploadingPdf, setUploadingPdf] = useState(false);
-  const [saveSuccessMsg, setSaveSuccessMsg] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
-  // Form State for "Reserva Jardim Barra"
-  const [formData, setFormData] = useState({
-    nome: 'Reserva Jardim Barra',
-    bairroRegiao: 'Barra da Tijuca, Rio de Janeiro - RJ',
-    tipologias: '2 e 3 Quartos (Suíte) + Varanda Gourmet Integrada',
-    metragens: '84m² a 114m² privativos',
-    precoFaixa: 'A partir de R$ 980.000 (2Q) e R$ 1.450.000 (3Q)',
-    previsaoEntrega: 'Novembro de 2026',
-    condicoesComerciais: 'Entrada de 20% facilitada em 36x direto com a incorporadora + Financiamento Caixa/Itaú na entrega',
-    urlPublica: 'https://directhouses.com.br/lancamentos/reserva-jardim-barra',
-    descricao: 'O Reserva Jardim é o equilíbrio perfeito entre sofisticação contemporânea e contato genuíno com a natureza na Barra da Tijuca. Desenvolvido para famílias que priorizam segurança, conveniência e acabamentos nobres, o projeto conta com plantas amplas de 2 e 3 quartos com suíte, varanda gourmet 100% integrada ao living e mais de 4.000m² de lazer privativo tipo resort.',
-    // Tags
-    localizacaoTags: [
-      'A 5 min do Shopping BarraShopping',
-      'Próximo à estação de BRT e Metrô Jardim Oceânico',
-      'Fácil acesso à Praia da Barra',
-    ],
-    lazerTags: [
-      'Piscina aquecida',
-      'Academia de 300m²',
-      'Espaço Coworking',
-      'Quadra de Beach Tennis',
-      'Pet Place',
-    ],
-    // Mídias
-    fotos: [
-      {
-        id: '1',
-        nome: '01_Fachada_Principal.jpg',
-        url: 'https://lh3.googleusercontent.com/aida-public/AB6AXuD0rblLGzdjmJbNOzkPfGamjrzhqSk1BKI2azqP1q7EawMkYSYck4wdqSag__cXkb4K1E6B5MaifB4IvBiuyGMKn8t4qbU8RaFtolibMh7P-755WI0-TvLr1Yro7F4wbRbFpFGyVpYo_wsUpr48EdJ42tmUmfPxkJ2WzlN7VMRLwqEsbw5kc6sZV2ySEwCxgl84irG5H4OfFPWc042tkfvrzuva9zLfV3u2tk3QtICJyVv1vc843EhBwQ',
-        tamanhoKb: 420,
-      },
-      {
-        id: '2',
-        nome: '02_Living_Ampliado.jpg',
-        url: 'https://lh3.googleusercontent.com/aida-public/AB6AXuBUzW4ejWiblbjKuq9CY_TUtPaLzRduIggXAeXQBOAf6CL0B-Oru2HCCsla_wmRclCZAytit4WK8VOmV6nZOvWel_HvdgHlz-RrkzTR97aUpMB18X_E7LCDVNaoXen0ZHOjoAUogz6kaNiLOPZh2lblL1-bh6MvLp_QygARwLpfAABYYc08X72GQAAv6pQBEy9BtALjDs_9lr_7SARhuzrCq4LTgyeswxApFFAeRaTkIMNDZcOq4NJpqQ',
-        tamanhoKb: 385,
-      },
-      {
-        id: '3',
-        nome: '03_Varanda_Gourmet.jpg',
-        url: 'https://lh3.googleusercontent.com/aida-public/AB6AXuDTvlfgJYxas_zqfBCYfQUABrP7j6DrIrkXGgKqdljzjpzefPBIfkqbYg71OGO3KELkIOBZ2g4bZX_qav0hW4aPbBarkrkm7_OFLadmOgf9yyM84Imq-c7C3IZKEFYjj1iBpNzlZRIIOwNiRDZU7fMxr_rG8KTkdDyDXIRtdkWgSYPp7IWTVXTG0s4reTQMz4F1LFqmF8oIL_kNoPgG_ahYF8O_xdNG0xzN-exIL6JAKUbBnzi26cR0nA',
-        tamanhoKb: 510,
-      },
-      {
-        id: '4',
-        nome: '04_Piscina_Borda_Infinita.jpg',
-        url: 'https://lh3.googleusercontent.com/aida-public/AB6AXuC6WrL_MtQ5r-gARz-jFBWG0GwBKxz_OmKGWnRCDOLYuvmbkIDHTUqgEfcyFqW0if3zb6hhrn7pmJZlfe8PFph5Sqm9G1IiO0eyikxPa6_ls_-kBJYi7TG5MXOOMCtGHELVjcqucV-VOoLMWYTFOzviuGu2nR7XaZzFQkepbXRW0dTu4xPT1NdK3WdPOwrGsDmTHPJLpWCHktaJtgtYb8c_8zsRy7a79l6uK9edWPfhbPpX0JxRw4Rxtw',
-        tamanhoKb: 460,
-      },
-    ],
-    bookPdf: {
-      nome: 'Book_Comercial_Reserva_Jardim_V3.pdf',
-      tamanhoMb: 14.2,
-      url: '/uploads/sample_book.pdf',
-    },
-    // Nível 3 DLP (Confidencial)
-    dlp: {
-      construtora: 'Cyrela RJ Participações S.A.',
-      contatoDiretor: 'Eng. Marcelo Castro (21) 98711-0099',
-      enderecoExato: 'Av. das Américas, Lote 14B - Matrícula RGI nº 148.922 - 9º Ofício',
-      comissao: 'Comissão Total 5.5% (Diretoria 1.5% / Corretor 4.0%)',
-    },
-  });
+  // Form State
+  const [formData, setFormData] = useState(DEFAULT_FORM_DATA);
 
   const [newTagText, setNewTagText] = useState('');
   const [newTagType, setNewTagType] = useState<'local' | 'lazer'>('local');
   const [showAddTagModal, setShowAddTagModal] = useState(false);
 
   // Fetch real lancamentos from backend
-  useEffect(() => {
-    fetch('/api/lancamentos')
-      .then((res) => {
-        if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
-          return res.json();
-        }
-        return [];
-      })
-      .then((data) => {
-        if (Array.isArray(data) && data.length > 0) {
+  const fetchLancamentos = async () => {
+    try {
+      const res = await fetch('/api/lancamentos');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
           setLancamentos(data);
+          return data;
         }
-      })
-      .catch(() => {});
+      }
+    } catch (err) {
+      console.error('Erro ao carregar lançamentos:', err);
+    }
+    return [];
+  };
+
+  useEffect(() => {
+    fetchLancamentos().then((items) => {
+      if (items.length > 0 && !selectedId) {
+        loadLancamentoIntoForm(items[0]);
+      }
+    });
   }, []);
+
+  const loadLancamentoIntoForm = (item: LancamentoItem) => {
+    setSelectedId(item.id);
+
+    // Parse fotos
+    const fotosList: Array<{ id: string; nome: string; url: string; tamanhoKb?: number }> = [];
+    if (Array.isArray(item.fotosUpload) && item.fotosUpload.length > 0) {
+      item.fotosUpload.forEach((f) => {
+        fotosList.push({
+          id: f.id || f.filename,
+          nome: f.originalName || f.filename,
+          url: f.url,
+          tamanhoKb: 350,
+        });
+      });
+    } else if (item.fotos) {
+      const split = item.fotos.split(',').map((s) => s.trim()).filter(Boolean);
+      split.forEach((url, i) => {
+        fotosList.push({
+          id: `foto-${i}`,
+          nome: `Foto_${i + 1}.jpg`,
+          url,
+          tamanhoKb: 400,
+        });
+      });
+    }
+
+    // Parse book PDF
+    let bookPdfObj: { nome: string; tamanhoMb?: number; url: string } | null = null;
+    if (item.bookPdfUpload && item.bookPdfUpload.url) {
+      bookPdfObj = {
+        nome: item.bookPdfUpload.originalName || item.bookPdfUpload.filename,
+        url: item.bookPdfUpload.url,
+        tamanhoMb: 12.5,
+      };
+    } else if (item.linkBookPdf) {
+      bookPdfObj = {
+        nome: item.documentoOrigemNome || 'Book_Comercial.pdf',
+        url: item.linkBookPdf,
+        tamanhoMb: 14.2,
+      };
+    }
+
+    // Parse tags
+    let locTags: string[] = [];
+    if (item.localidade) {
+      locTags = item.localidade.split('•').map((s) => s.trim()).filter(Boolean);
+      if (locTags.length <= 1) {
+        locTags = item.localidade.split(',').map((s) => s.trim()).filter(Boolean);
+      }
+    }
+    if (locTags.length === 0) {
+      locTags = [
+        `Localizado em ${item.bairro}`,
+        `Próximo a vias principais de ${item.cidade || 'Rio de Janeiro'}`,
+        'Fácil acesso a conveniências',
+      ];
+    }
+
+    let lazTags: string[] = [];
+    if (item.diferenciais) {
+      lazTags = item.diferenciais.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    if (lazTags.length === 0) {
+      lazTags = ['Lazer Completo', 'Piscina', 'Academia', 'Segurança 24h'];
+    }
+
+    setFormData({
+      nome: item.nome || '',
+      bairro: item.bairro || '',
+      cidade: item.cidade || 'Rio de Janeiro',
+      tipologias: item.tipologias || '',
+      metragens: item.metragens || '',
+      quartos: item.quartos || '',
+      precoFaixa: item.precoAPartirDe || '',
+      previsaoEntrega: item.previsaoEntrega || '',
+      condicoesComerciais: item.condicoesComerciais || '',
+      urlPublica: item.urlPublicaDirectHouse || '',
+      descricao: item.descricao || item.conteudoPublicoAutorizado || '',
+      localizacaoTags: locTags,
+      lazerTags: lazTags,
+      fotos: fotosList,
+      bookPdf: bookPdfObj,
+      dlp: {
+        construtora: item.construtora || 'Incorporadora Homologada',
+        contatoDiretor: item.telefoneConstrutora || item.contatoTerceiro || '(21) 98711-0099',
+        enderecoExato: item.enderecoCompleto || 'Endereço registrado sob sigilo no RGI',
+        comissao: item.notasInternas || 'Comissão Padrão Direct House (DLP Ativo)',
+        notasInternas: item.notasInternas || '',
+        dadosCadastrais: item.dadosCadastrais || '',
+      },
+      status: item.status || 'ativo',
+    });
+  };
+
+  const handleNewLancamento = () => {
+    setSelectedId('');
+    setFormData({
+      nome: '',
+      bairro: '',
+      cidade: 'Rio de Janeiro',
+      tipologias: '',
+      metragens: '',
+      quartos: '',
+      precoFaixa: '',
+      previsaoEntrega: '',
+      condicoesComerciais: '',
+      urlPublica: '',
+      descricao: '',
+      localizacaoTags: ['Localização Nobre', 'Fácil Acesso'],
+      lazerTags: ['Piscina', 'Academia', 'Segurança 24h'],
+      fotos: [],
+      bookPdf: null,
+      dlp: {
+        construtora: '',
+        contatoDiretor: '',
+        enderecoExato: '',
+        comissao: '',
+        notasInternas: '',
+        dadosCadastrais: '',
+      },
+      status: 'ativo',
+    });
+    setActiveTab('editar');
+  };
+
+  const handleDeleteLancamento = async (id: string, nomeEmpreendimento?: string) => {
+    const nome = nomeEmpreendimento || formData.nome || 'este lançamento';
+    const confirmDelete = window.confirm(
+      `Tem certeza que deseja excluir o lançamento "${nome}"?\n\nEsta ação removerá o catálogo do sistema e a IA deixará de mencioná-lo no WhatsApp.`
+    );
+    if (!confirmDelete) return;
+
+    setIsDeleting(true);
+    try {
+      const res = await fetch(`/api/lancamentos/${id}`, {
+        method: 'DELETE',
+      });
+
+      if (res.ok) {
+        const remaining = lancamentos.filter((l) => l.id !== id);
+        setLancamentos(remaining);
+        if (selectedId === id) {
+          if (remaining.length > 0) {
+            loadLancamentoIntoForm(remaining[0]);
+          } else {
+            handleNewLancamento();
+          }
+        }
+        showToast('Lançamento excluído com sucesso!');
+        onLancamentosUpdated?.();
+      } else {
+        alert('Erro ao excluir lançamento. Tente novamente.');
+      }
+    } catch (err) {
+      console.error('Erro na exclusão do lançamento:', err);
+      alert('Erro de conexão ao excluir lançamento.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleToggleStatus = async (id: string, currentStatus: CatalogoStatus) => {
+    const newStatus: CatalogoStatus = currentStatus === 'ativo' ? 'inativo' : 'ativo';
+    try {
+      const res = await fetch(`/api/lancamentos/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
+
+      if (res.ok) {
+        const updated = await res.json();
+        setLancamentos((prev) =>
+          prev.map((l) => (l.id === id ? { ...l, status: newStatus, active: newStatus === 'ativo' } : l))
+        );
+        if (selectedId === id) {
+          setFormData((prev) => ({ ...prev, status: newStatus }));
+        }
+        showToast(`Status atualizado para: ${newStatus === 'ativo' ? 'Ativo (Liberado no WhatsApp)' : 'Inativo (Pausado)'}`);
+        onLancamentosUpdated?.();
+      }
+    } catch (err) {
+      console.error('Erro ao alternar status:', err);
+    }
+  };
 
   const handleUploadFoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -136,34 +321,43 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
 
     setUploadingFoto(true);
     try {
-      const file = files[0];
-      const form = new FormData();
-      form.append('file', file);
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const base64 = await fileToBase64(file);
 
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        body: form,
-      });
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: file.name,
+            dataUrl: base64,
+            type: 'image',
+          }),
+        });
 
-      if (res.ok) {
-        const data = await res.json();
-        setFormData((prev) => ({
-          ...prev,
-          fotos: [
-            ...prev.fotos,
-            {
-              id: String(Date.now()),
-              nome: data.originalName || file.name,
-              url: data.url,
-              tamanhoKb: Math.round(file.size / 1024),
-            },
-          ],
-        }));
+        if (res.ok) {
+          const data = await res.json();
+          setFormData((prev) => ({
+            ...prev,
+            fotos: [
+              ...prev.fotos,
+              {
+                id: `img-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                nome: data.originalName || file.name,
+                url: data.url,
+                tamanhoKb: Math.round(file.size / 1024),
+              },
+            ],
+          }));
+        }
       }
+      showToast(`${files.length} foto(s) enviada(s) com sucesso!`);
     } catch (err) {
       console.error('Erro no upload de foto:', err);
+      alert('Erro ao enviar imagem. Verifique o tamanho do arquivo.');
     } finally {
       setUploadingFoto(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -172,6 +366,45 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
       ...prev,
       fotos: prev.fotos.filter((f) => f.id !== id),
     }));
+  };
+
+  const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingPdf(true);
+    try {
+      const base64 = await fileToBase64(file);
+
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name,
+          dataUrl: base64,
+          type: 'document',
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setFormData((prev) => ({
+          ...prev,
+          bookPdf: {
+            nome: data.originalName || file.name,
+            tamanhoMb: parseFloat((file.size / (1024 * 1024)).toFixed(1)),
+            url: data.url,
+          },
+        }));
+        showToast('Book Comercial PDF enviado com sucesso!');
+      }
+    } catch (err) {
+      console.error('Erro no upload de PDF:', err);
+      alert('Erro ao enviar PDF.');
+    } finally {
+      setUploadingPdf(false);
+      if (pdfInputRef.current) pdfInputRef.current.value = '';
+    }
   };
 
   const handleRemoveTag = (type: 'local' | 'lazer', index: number) => {
@@ -205,10 +438,105 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
     setShowAddTagModal(false);
   };
 
-  const handleSaveAll = () => {
-    setSaveSuccessMsg(true);
-    setTimeout(() => setSaveSuccessMsg(false), 3500);
+  const showToast = (msg: string) => {
+    setSaveSuccessMsg(msg);
+    setTimeout(() => setSaveSuccessMsg(null), 3800);
   };
+
+  const handleSaveAll = async () => {
+    if (!formData.nome.trim()) {
+      alert('Por favor, informe o nome do empreendimento.');
+      return;
+    }
+    if (!formData.bairro.trim()) {
+      alert('Por favor, informe o bairro/região.');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const payload: Partial<LancamentoItem> = {
+        nome: formData.nome.trim(),
+        bairro: formData.bairro.trim(),
+        cidade: formData.cidade.trim() || 'Rio de Janeiro',
+        tipologias: formData.tipologias.trim(),
+        metragens: formData.metragens.trim(),
+        quartos: formData.quartos.trim(),
+        precoAPartirDe: formData.precoFaixa.trim(),
+        previsaoEntrega: formData.previsaoEntrega.trim(),
+        condicoesComerciais: formData.condicoesComerciais.trim(),
+        urlPublicaDirectHouse: formData.urlPublica.trim(),
+        descricao: formData.descricao.trim(),
+        localidade: formData.localizacaoTags.join(' • '),
+        diferenciais: formData.lazerTags.join(', '),
+        status: formData.status || 'ativo',
+        active: formData.status === 'ativo',
+        // Uploads nativos
+        fotosUpload: formData.fotos.map((f) => ({
+          id: f.id,
+          filename: f.nome,
+          url: f.url,
+          originalName: f.nome,
+        })),
+        bookPdfUpload: formData.bookPdf
+          ? {
+              filename: formData.bookPdf.nome,
+              url: formData.bookPdf.url,
+              originalName: formData.bookPdf.nome,
+            }
+          : undefined,
+        // Nível 3 DLP
+        construtora: formData.dlp.construtora.trim(),
+        telefoneConstrutora: formData.dlp.contatoDiretor.trim(),
+        enderecoCompleto: formData.dlp.enderecoExato.trim(),
+        notasInternas: formData.dlp.comissao.trim(),
+        dadosCadastrais: formData.dlp.dadosCadastrais?.trim() || '',
+        usuarioResponsavel: `Admin (${companyName})`,
+      };
+
+      let res: Response;
+      if (selectedId) {
+        res = await fetch(`/api/lancamentos/${selectedId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        res = await fetch('/api/lancamentos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      }
+
+      if (res.ok) {
+        const savedItem = await res.json();
+        setSelectedId(savedItem.id);
+        const updatedList = await fetchLancamentos();
+        showToast('Lançamento salvo e sincronizado com o WhatsApp com sucesso!');
+        onLancamentosUpdated?.();
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        alert(`Erro ao salvar: ${errorData.error || 'Verifique os campos obrigatórios'}`);
+      }
+    } catch (err) {
+      console.error('Erro ao salvar lançamento:', err);
+      alert('Erro de conexão ao salvar lançamento.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const filteredLancamentos = lancamentos.filter((l) => {
+    if (!searchTerm.trim()) return true;
+    const term = searchTerm.toLowerCase();
+    return (
+      l.nome?.toLowerCase().includes(term) ||
+      l.bairro?.toLowerCase().includes(term) ||
+      l.tipologias?.toLowerCase().includes(term) ||
+      l.id?.toLowerCase().includes(term)
+    );
+  });
 
   return (
     <div className="w-full flex flex-col gap-6 max-w-[1720px] mx-auto">
@@ -246,8 +574,8 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
               <ImageIcon className="w-4 h-4" />
             </div>
             <div className="flex flex-col">
-              <span className="text-[10px] text-slate-400 uppercase font-semibold">Mídias WhatsApp</span>
-              <span className="text-xs font-bold text-slate-800">Prontas (WebP/JPG)</span>
+              <span className="text-[10px] text-slate-400 uppercase font-semibold">Catálogos no Sistema</span>
+              <span className="text-xs font-bold text-slate-800">{lancamentos.length} Empreendimentos</span>
             </div>
           </div>
         </div>
@@ -267,7 +595,7 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
             <Building className="w-4 h-4" />
             <span>Empreendimentos Ativos</span>
             <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-800 text-[10px] font-bold">
-              {lancamentos.length || 6}
+              {lancamentos.length}
             </span>
           </button>
 
@@ -280,7 +608,9 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
             }`}
           >
             <FileText className="w-4 h-4" />
-            <span>Editar Lançamento: {formData.nome}</span>
+            <span>
+              {selectedId ? `Editar: ${formData.nome || 'Lançamento'}` : 'Cadastrar Novo Lançamento'}
+            </span>
             <span className="flex h-2 w-2 relative">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
@@ -312,36 +642,235 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
         </div>
       </div>
 
-      {/* CONTEÚDO DA ABA: EDITAR LANÇAMENTO */}
+      {/* CONTEÚDO DA ABA: EMPREENDIMENTOS ATIVOS */}
+      {activeTab === 'empreendimentos' && (
+        <div className="bg-white p-6 rounded-xl border border-slate-200/80 shadow-xs flex flex-col gap-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">
+                Empreendimentos Cadastrados ({lancamentos.length})
+              </h3>
+              <p className="text-xs text-slate-500">
+                Lançamentos sincronizados e autorizados para entrega pelo WhatsApp e corretores plantonistas.
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Buscar lançamento..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="h-9 pl-9 pr-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 w-48 sm:w-64"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleNewLancamento}
+                className="px-3.5 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 transition-all flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Novo Lançamento</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Grid de Cards Dinâmicos */}
+          {filteredLancamentos.length === 0 ? (
+            <div className="p-12 text-center flex flex-col items-center justify-center gap-3 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+              <Building className="w-10 h-10 text-slate-300" />
+              <div className="flex flex-col gap-1">
+                <span className="text-sm font-bold text-slate-700">Nenhum empreendimento encontrado</span>
+                <span className="text-xs text-slate-400">
+                  {searchTerm ? 'Tente ajustar sua busca por nome ou bairro.' : 'Comece cadastrando seu primeiro lançamento no catálogo.'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleNewLancamento}
+                className="mt-2 px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Cadastrar Primeiro Lançamento</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-1">
+              {filteredLancamentos.map((item) => {
+                const isAtivo = item.status === 'ativo' || item.active === true;
+                const fotosCount = item.fotosUpload?.length || (item.fotos ? item.fotos.split(',').length : 0);
+                const hasPdf = !!item.bookPdfUpload?.url || !!item.linkBookPdf;
+
+                return (
+                  <div
+                    key={item.id}
+                    className={`p-5 rounded-xl border flex flex-col justify-between gap-4 transition-all shadow-2xs hover:shadow-md ${
+                      selectedId === item.id
+                        ? 'bg-blue-50/40 border-blue-300 ring-1 ring-blue-400/30'
+                        : 'bg-white border-slate-200/90'
+                    }`}
+                  >
+                    <div className="flex flex-col gap-2.5">
+                      {/* Top Badges */}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-blue-600 font-mono">
+                          #{item.id.toUpperCase()}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleStatus(item.id, item.status)}
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold border cursor-pointer transition-colors ${
+                              isAtivo
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-200 hover:bg-emerald-200'
+                                : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
+                            }`}
+                            title="Clique para alternar o status do lançamento"
+                          >
+                            {isAtivo ? '● ATIVO NO WHATSAPP' : '○ PAUSADO'}
+                          </button>
+                          <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10px] font-bold border border-rose-200">
+                            DLP 100%
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Title & Info */}
+                      <div>
+                        <h4 className="text-base font-bold text-slate-900 tracking-tight">
+                          {item.nome}
+                        </h4>
+                        <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">
+                          {item.bairro} {item.cidade ? `• ${item.cidade}` : ''}
+                        </p>
+                      </div>
+
+                      {/* Specs */}
+                      <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 text-xs flex flex-col gap-1 text-slate-700">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500">Tipologias:</span>
+                          <span className="font-semibold text-slate-900 truncate max-w-[170px]">
+                            {item.tipologias || 'Sob consulta'}
+                          </span>
+                        </div>
+                        {item.precoAPartirDe && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-500">Valor a partir:</span>
+                            <span className="font-bold text-emerald-700">
+                              {item.precoAPartirDe}
+                            </span>
+                          </div>
+                        )}
+                        {item.metragens && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-500">Metragem:</span>
+                            <span className="font-medium text-slate-800">
+                              {item.metragens}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Mídias Badges */}
+                      <div className="flex items-center gap-2 text-[11px] text-slate-500">
+                        <span className="inline-flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded">
+                          <ImageIcon className="w-3 h-3 text-blue-600" />
+                          {fotosCount} foto{fotosCount !== 1 ? 's' : ''}
+                        </span>
+                        {hasPdf && (
+                          <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-700 px-2 py-0.5 rounded border border-rose-100">
+                            <FileText className="w-3 h-3" />
+                            Book PDF
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Footer Actions */}
+                    <div className="flex items-center justify-between pt-3 border-t border-slate-100 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteLancamento(item.id, item.nome)}
+                        disabled={isDeleting}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                        title={`Excluir "${item.nome}"`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          loadLancamentoIntoForm(item);
+                          setActiveTab('editar');
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                      >
+                        <span>Configurar & DLP</span>
+                        <span>→</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* CONTEÚDO DA ABA: EDITAR / CADASTRAR LANÇAMENTO */}
       {activeTab === 'editar' && (
         <div className="flex flex-col gap-6">
           {/* Header do Empreendimento Selecionado */}
           <div className="bg-white p-5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="flex items-start md:items-center gap-4">
-              <div className="w-13 h-13 rounded-xl bg-slate-900 flex items-center justify-center text-white text-xl font-bold shadow-xs">
-                RJ
+              <div className="w-13 h-13 rounded-xl bg-slate-900 flex items-center justify-center text-white text-xl font-bold shadow-xs shrink-0">
+                {formData.nome ? formData.nome.substring(0, 2).toUpperCase() : 'DH'}
               </div>
               <div className="flex flex-col">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-                    {formData.nome}
+                    {formData.nome || 'Novo Lançamento'}
                   </h2>
-                  <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold text-[11px] border border-blue-200">
-                    ID #DH-8842
+                  <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold text-[11px] border border-blue-200 font-mono">
+                    {selectedId ? `#${selectedId.toUpperCase()}` : 'NOVO'}
                   </span>
-                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 text-[11px] font-semibold border border-emerald-200">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                    Publicado no WhatsApp API
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
+                      formData.status === 'ativo'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                        : 'bg-slate-100 text-slate-600 border-slate-200'
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        formData.status === 'ativo' ? 'bg-emerald-500' : 'bg-slate-400'
+                      }`}
+                    ></span>
+                    {formData.status === 'ativo' ? 'Publicado no WhatsApp API' : 'Pausado / Não divulgado'}
                   </span>
                 </div>
                 <span className="text-xs text-slate-500 mt-0.5">
-                  Última checagem de integridade criptográfica: Hoje às 15:42 • Protocolo SHA-256
+                  Última checagem de integridade criptográfica: Protocolo SHA-256 • Barreira DLP Ativa
                 </span>
               </div>
             </div>
 
             {/* Ações do Cabeçalho */}
             <div className="flex flex-wrap items-center gap-2">
+              {selectedId && (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteLancamento(selectedId, formData.nome)}
+                  disabled={isDeleting}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold border border-rose-200 transition-all cursor-pointer"
+                  title="Excluir este lançamento"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Excluir Lançamento</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setIsTestPromptOpen(true)}
@@ -353,10 +882,20 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
               <button
                 type="button"
                 onClick={handleSaveAll}
+                disabled={isSaving}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold shadow hover:bg-slate-800 transition-all cursor-pointer"
               >
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                <span>Salvar & Replicar</span>
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
+                    <span>Salvando...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>Salvar & Replicar</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -391,10 +930,11 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="flex flex-col gap-1">
                     <label className="text-xs font-semibold text-slate-700">
-                      Nome Comercial do Empreendimento
+                      Nome Comercial do Empreendimento *
                     </label>
                     <input
                       type="text"
+                      placeholder="Ex: Reserva Jardim Barra"
                       value={formData.nome}
                       onChange={(e) => setFormData({ ...formData, nome: e.target.value })}
                       className="h-10 px-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all"
@@ -402,11 +942,12 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs font-semibold text-slate-700">Bairro / Região</label>
+                    <label className="text-xs font-semibold text-slate-700">Bairro / Região *</label>
                     <input
                       type="text"
-                      value={formData.bairroRegiao}
-                      onChange={(e) => setFormData({ ...formData, bairroRegiao: e.target.value })}
+                      placeholder="Ex: Barra da Tijuca, Rio de Janeiro - RJ"
+                      value={formData.bairro}
+                      onChange={(e) => setFormData({ ...formData, bairro: e.target.value })}
                       className="h-10 px-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all"
                     />
                   </div>
@@ -415,6 +956,7 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     <label className="text-xs font-semibold text-slate-700">Tipologias de Plantas</label>
                     <input
                       type="text"
+                      placeholder="Ex: 2 e 3 Quartos (Suíte) + Varanda Gourmet Integrada"
                       value={formData.tipologias}
                       onChange={(e) => setFormData({ ...formData, tipologias: e.target.value })}
                       className="h-10 px-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all"
@@ -425,6 +967,7 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     <label className="text-xs font-semibold text-slate-700">Metragem Privativa</label>
                     <input
                       type="text"
+                      placeholder="Ex: 84m² a 114m² privativos"
                       value={formData.metragens}
                       onChange={(e) => setFormData({ ...formData, metragens: e.target.value })}
                       className="h-10 px-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all"
@@ -437,6 +980,7 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     </label>
                     <input
                       type="text"
+                      placeholder="Ex: A partir de R$ 980.000 (2Q)"
                       value={formData.precoFaixa}
                       onChange={(e) => setFormData({ ...formData, precoFaixa: e.target.value })}
                       className="h-10 px-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all font-medium text-emerald-800"
@@ -449,6 +993,7 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     </label>
                     <input
                       type="text"
+                      placeholder="Ex: Novembro de 2026"
                       value={formData.previsaoEntrega}
                       onChange={(e) => setFormData({ ...formData, previsaoEntrega: e.target.value })}
                       className="h-10 px-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all"
@@ -461,6 +1006,7 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     </label>
                     <input
                       type="text"
+                      placeholder="Ex: Entrada facilitada durante obras + Financiamento bancário na entrega"
                       value={formData.condicoesComerciais}
                       onChange={(e) => setFormData({ ...formData, condicoesComerciais: e.target.value })}
                       className="h-10 px-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all"
@@ -475,18 +1021,21 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                       <ExternalLink className="w-4 h-4 text-slate-400 mr-2 shrink-0" />
                       <input
                         type="url"
+                        placeholder="https://directhouses.com.br/lancamentos/..."
                         value={formData.urlPublica}
                         onChange={(e) => setFormData({ ...formData, urlPublica: e.target.value })}
                         className="w-full bg-transparent text-sm text-slate-900 focus:outline-none"
                       />
-                      <a
-                        href={formData.urlPublica}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs text-blue-600 font-semibold hover:underline shrink-0 ml-2"
-                      >
-                        Testar Link
-                      </a>
+                      {formData.urlPublica && (
+                        <a
+                          href={formData.urlPublica}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs text-blue-600 font-semibold hover:underline shrink-0 ml-2"
+                        >
+                          Testar Link
+                        </a>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -509,7 +1058,7 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     </div>
                   </div>
                   <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-semibold">
-                    {formData.fotos.length} Fotos • 1 Book PDF Ativo
+                    {formData.fotos.length} Fotos • {formData.bookPdf ? '1 Book PDF Ativo' : 'Nenhum PDF'}
                   </span>
                 </div>
 
@@ -522,38 +1071,40 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     <span className="text-xs text-slate-400">Dimensão recomendada: 1200x900px</span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-                    {formData.fotos.map((foto) => (
-                      <div
-                        key={foto.id}
-                        className="group relative rounded-xl overflow-hidden bg-slate-100 shadow-xs aspect-4/3 flex flex-col justify-end border border-slate-200"
-                      >
-                        <img
-                          src={foto.url}
-                          alt={foto.nome}
-                          referrerPolicy="no-referrer"
-                          className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent"></div>
-                        <div className="relative p-2.5 flex flex-col gap-0.5 text-white">
-                          <span className="text-[11px] font-bold truncate">{foto.nome}</span>
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] text-emerald-300 font-semibold">
-                              ✓ Otimizado ({foto.tamanhoKb} KB)
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveFoto(foto.id)}
-                              className="w-6 h-6 rounded-full bg-black/60 hover:bg-rose-600 flex items-center justify-center text-white transition-colors cursor-pointer"
-                              title="Remover foto"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
+                  {formData.fotos.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                      {formData.fotos.map((foto) => (
+                        <div
+                          key={foto.id}
+                          className="group relative rounded-xl overflow-hidden bg-slate-100 shadow-xs aspect-4/3 flex flex-col justify-end border border-slate-200"
+                        >
+                          <img
+                            src={foto.url}
+                            alt={foto.nome}
+                            referrerPolicy="no-referrer"
+                            className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent"></div>
+                          <div className="relative p-2.5 flex flex-col gap-0.5 text-white">
+                            <span className="text-[11px] font-bold truncate">{foto.nome}</span>
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] text-emerald-300 font-semibold">
+                                ✓ Otimizado ({foto.tamanhoKb || 350} KB)
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveFoto(foto.id)}
+                                className="w-6 h-6 rounded-full bg-black/60 hover:bg-rose-600 flex items-center justify-center text-white transition-colors cursor-pointer"
+                                title="Remover foto"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Upload Drag & Drop Area */}
                   <input
@@ -561,19 +1112,29 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     ref={fileInputRef}
                     onChange={handleUploadFoto}
                     accept="image/*"
+                    multiple
                     className="hidden"
                   />
                   <div
                     onClick={() => fileInputRef.current?.click()}
                     className="mt-1 p-4 rounded-xl bg-slate-50 border-2 border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50/50 flex flex-col items-center justify-center text-center cursor-pointer transition-all"
                   >
-                    <Upload className="w-6 h-6 text-blue-600 mb-1" />
-                    <span className="text-xs font-bold text-slate-800">
-                      {uploadingFoto ? 'Enviando foto...' : 'Arraste novas imagens ou clique para selecionar'}
-                    </span>
-                    <span className="text-[11px] text-slate-400 mt-0.5">
-                      Formatos aceitos: JPG, PNG, WEBP (Compressão nativa 90% preservando nitidez)
-                    </span>
+                    {uploadingFoto ? (
+                      <div className="flex flex-col items-center gap-2">
+                        <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+                        <span className="text-xs font-bold text-slate-800">Processando e enviando imagem...</span>
+                      </div>
+                    ) : (
+                      <>
+                        <Upload className="w-6 h-6 text-blue-600 mb-1" />
+                        <span className="text-xs font-bold text-slate-800">
+                          Arraste novas imagens ou clique para selecionar
+                        </span>
+                        <span className="text-[11px] text-slate-400 mt-0.5">
+                          Formatos aceitos: JPG, PNG, WEBP (Compressão nativa para disparo no WhatsApp)
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -587,6 +1148,7 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                   </div>
                   <textarea
                     rows={4}
+                    placeholder="Descreva o conceito do empreendimento, diferenciais arquitetônicos e pontos de destaque que a IA deve utilizar para encantar o cliente."
                     value={formData.descricao}
                     onChange={(e) => setFormData({ ...formData, descricao: e.target.value })}
                     className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 leading-relaxed resize-none transition-all"
@@ -672,51 +1234,99 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                   <label className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                     5. Documento Oficial do Lançamento (PDF Nativo)
                   </label>
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl bg-slate-50 border border-slate-200 gap-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-11 h-11 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
-                        <FileText className="w-6 h-6" />
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-sm font-bold text-slate-900">
-                          {formData.bookPdf.nome}
-                        </span>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-xs text-slate-500">
-                            Tamanho: {formData.bookPdf.tamanhoMb} MB
+                  {formData.bookPdf ? (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl bg-slate-50 border border-slate-200 gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-11 h-11 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                          <FileText className="w-6 h-6" />
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-bold text-slate-900">
+                            {formData.bookPdf.nome}
                           </span>
-                          <span className="text-slate-300">•</span>
-                          <span className="inline-flex items-center gap-1 text-emerald-700 text-xs font-semibold">
-                            <CheckCircle2 className="w-3 h-3" /> Disparo Automático Habilitado no WhatsApp
-                          </span>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            {formData.bookPdf.tamanhoMb && (
+                              <>
+                                <span className="text-xs text-slate-500">
+                                  Tamanho: {formData.bookPdf.tamanhoMb} MB
+                                </span>
+                                <span className="text-slate-300">•</span>
+                              </>
+                            )}
+                            <span className="inline-flex items-center gap-1 text-emerald-700 text-xs font-semibold">
+                              <CheckCircle2 className="w-3 h-3" /> Disparo Automático Habilitado no WhatsApp
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="file"
+                          ref={pdfInputRef}
+                          onChange={handleUploadPdf}
+                          accept="application/pdf"
+                          className="hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => pdfInputRef.current?.click()}
+                          className="px-3.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+                        >
+                          Substituir PDF
+                        </button>
+                        <a
+                          href={formData.bookPdf.url}
+                          download
+                          target="_blank"
+                          rel="noreferrer"
+                          className="p-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 hover:text-blue-600 transition-all cursor-pointer shadow-2xs"
+                          title="Baixar ou visualizar PDF"
+                        >
+                          <Download className="w-4 h-4" />
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, bookPdf: null })}
+                          className="p-2 rounded-lg bg-white border border-slate-200 hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-all cursor-pointer shadow-2xs"
+                          title="Remover PDF"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
                       <input
                         type="file"
                         ref={pdfInputRef}
+                        onChange={handleUploadPdf}
                         accept="application/pdf"
                         className="hidden"
                       />
-                      <button
-                        type="button"
+                      <div
                         onClick={() => pdfInputRef.current?.click()}
-                        className="px-3.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+                        className="p-4 rounded-xl bg-slate-50 border-2 border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50/50 flex flex-col items-center justify-center text-center cursor-pointer transition-all"
                       >
-                        Substituir PDF
-                      </button>
-                      <a
-                        href={formData.bookPdf.url}
-                        download
-                        className="p-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 hover:text-blue-600 transition-all cursor-pointer shadow-2xs"
-                        title="Baixar PDF"
-                      >
-                        <Download className="w-4 h-4" />
-                      </a>
+                        {uploadingPdf ? (
+                          <div className="flex flex-col items-center gap-2">
+                            <Loader2 className="w-6 h-6 text-rose-600 animate-spin" />
+                            <span className="text-xs font-bold text-slate-800">Enviando Book PDF...</span>
+                          </div>
+                        ) : (
+                          <>
+                            <FileText className="w-6 h-6 text-rose-600 mb-1" />
+                            <span className="text-xs font-bold text-slate-800">
+                              Clique para fazer upload do Book Comercial em PDF
+                            </span>
+                            <span className="text-[11px] text-slate-400 mt-0.5">
+                              Arquivo oficial para disparo quando o cliente solicitar no WhatsApp
+                            </span>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -746,7 +1356,7 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                   </p>
                 </div>
 
-                {/* Campos Confidenciais Auditados */}
+                {/* Campos Confidenciais Editáveis para ADM com Indicação de Bloqueio IA */}
                 <div className="flex flex-col gap-3">
                   {/* Campo 1 */}
                   <div className="p-3 rounded-lg bg-[#2a1b24] border border-rose-900/40 flex flex-col gap-1">
@@ -761,9 +1371,15 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     </div>
                     <input
                       type="text"
-                      readOnly
+                      placeholder="Ex: Construtora X Participações S.A."
                       value={formData.dlp.construtora}
-                      className="h-8 px-2.5 rounded bg-black/40 text-xs text-slate-200 border border-rose-900/30 font-medium"
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          dlp: { ...formData.dlp, construtora: e.target.value },
+                        })
+                      }
+                      className="h-8 px-2.5 rounded bg-black/40 text-xs text-slate-200 border border-rose-900/30 font-medium focus:outline-none focus:border-rose-500"
                     />
                     <span className="text-[10px] text-slate-400">
                       O cliente final no WhatsApp recebe apenas a chancela {companyName}.
@@ -783,9 +1399,15 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     </div>
                     <input
                       type="text"
-                      readOnly
+                      placeholder="Ex: Eng. Responsável (21) 98765-4321"
                       value={formData.dlp.contatoDiretor}
-                      className="h-8 px-2.5 rounded bg-black/40 text-xs text-slate-200 border border-rose-900/30 font-mono"
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          dlp: { ...formData.dlp, contatoDiretor: e.target.value },
+                        })
+                      }
+                      className="h-8 px-2.5 rounded bg-black/40 text-xs text-slate-200 border border-rose-900/30 font-mono focus:outline-none focus:border-rose-500"
                     />
                     <span className="text-[10px] text-slate-400">
                       Bloqueio total de vazamento telefônico ou bypass de intermediação.
@@ -805,12 +1427,18 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     </div>
                     <input
                       type="text"
-                      readOnly
+                      placeholder="Ex: Rua Tal, Lote 14 - Matrícula RGI nº 12345"
                       value={formData.dlp.enderecoExato}
-                      className="h-8 px-2.5 rounded bg-black/40 text-xs text-slate-200 border border-rose-900/30"
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          dlp: { ...formData.dlp, enderecoExato: e.target.value },
+                        })
+                      }
+                      className="h-8 px-2.5 rounded bg-black/40 text-xs text-slate-200 border border-rose-900/30 focus:outline-none focus:border-rose-500"
                     />
                     <span className="text-[10px] text-slate-400">
-                      A IA informa apenas 'Região Nobre da Barra da Tijuca, próximo ao BarraShopping'.
+                      A IA informa apenas 'Região Nobre da {formData.bairro || 'cidade'}, próximo a pontos de referência'.
                     </span>
                   </div>
 
@@ -819,7 +1447,7 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-white flex items-center gap-1.5">
                         <Lock className="w-3 h-3 text-rose-400" />
-                        Comissionamento & Margens Imobiliária
+                        Comissionamento & Notas Internas
                       </span>
                       <span className="px-2 py-0.5 rounded-full bg-rose-950 text-rose-300 text-[10px] font-bold border border-rose-800">
                         ❌ Super Restrito
@@ -827,12 +1455,18 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                     </div>
                     <input
                       type="text"
-                      readOnly
+                      placeholder="Ex: Comissão 5% • Espelho de vendas interno"
                       value={formData.dlp.comissao}
-                      className="h-8 px-2.5 rounded bg-black/40 text-xs text-slate-200 border border-rose-900/30 font-semibold text-emerald-400"
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          dlp: { ...formData.dlp, comissao: e.target.value },
+                        })
+                      }
+                      className="h-8 px-2.5 rounded bg-black/40 text-xs text-slate-200 border border-rose-900/30 font-semibold text-emerald-400 focus:outline-none focus:border-rose-500"
                     />
                     <span className="text-[10px] text-slate-400">
-                      Disponível unicamente via SSO para cargos de nível Diretor ou Sócio.
+                      Disponível unicamente no painel administrativo para cargos de diretoria.
                     </span>
                   </div>
                 </div>
@@ -866,7 +1500,7 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                 </div>
 
                 <div className="pt-2 flex items-center justify-between text-[11px] text-slate-400 border-t border-rose-900/30">
-                  <span className="font-mono">DLP HASH: 8f92-ec71-44ab</span>
+                  <span className="font-mono">DLP HASH: SHA256-SAFE</span>
                   <button
                     type="button"
                     onClick={() => setActiveTab('governanca')}
@@ -885,22 +1519,20 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                 </div>
                 <div className="flex flex-col gap-2 text-xs">
                   <div className="flex items-center justify-between text-slate-600">
-                    <span>Leads em atendimento (24h):</span>
-                    <span className="font-bold text-slate-900">38 leads</span>
+                    <span>Empreendimentos cadastrados:</span>
+                    <span className="font-bold text-slate-900">{lancamentos.length} ativos</span>
                   </div>
                   <div className="flex items-center justify-between text-slate-600">
-                    <span>Books PDF enviados:</span>
-                    <span className="font-bold text-slate-900">24 downloads</span>
+                    <span>Status do item atual:</span>
+                    <span className={`font-bold ${formData.status === 'ativo' ? 'text-emerald-600' : 'text-slate-500'}`}>
+                      {formData.status === 'ativo' ? 'Ativo na IA' : 'Pausado'}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between text-slate-600">
                     <span>Tentativas de bypass bloqueadas:</span>
                     <span className="font-bold text-emerald-600">0 violações</span>
                   </div>
                 </div>
-                <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden mt-1">
-                  <div className="h-full bg-blue-600 rounded-full" style={{ width: '82%' }}></div>
-                </div>
-                <span className="text-[11px] text-slate-400">Capacidade de throughput da instância: 82% livre</span>
               </div>
             </div>
           </div>
@@ -920,10 +1552,10 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => setActiveTab('governanca')}
+                onClick={() => setActiveTab('empreendimentos')}
                 className="px-3.5 py-2 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 transition-all cursor-pointer"
               >
-                Histórico de Auditoria DLP
+                Voltar à Lista
               </button>
               <button
                 type="button"
@@ -936,112 +1568,21 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
               <button
                 type="button"
                 onClick={handleSaveAll}
+                disabled={isSaving}
                 className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 shadow transition-all flex items-center gap-1.5 cursor-pointer"
               >
-                <RefreshCw className="w-4 h-4 text-emerald-400" />
-                <span>Salvar Alterações & Replicar no WhatsApp</span>
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
+                    <span>Salvando...</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4 text-emerald-400" />
+                    <span>Salvar Alterações & Replicar no WhatsApp</span>
+                  </>
+                )}
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* CONTEÚDO DA ABA: EMPREENDIMENTOS ATIVOS */}
-      {activeTab === 'empreendimentos' && (
-        <div className="bg-white p-6 rounded-xl border border-slate-200/80 shadow-xs flex flex-col gap-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <h3 className="text-lg font-bold text-slate-900">
-                Empreendimentos Ativos na Roleta ({lancamentos.length || 6})
-              </h3>
-              <p className="text-xs text-slate-500">
-                Lançamentos sincronizados e autorizados para entrega pelo WhatsApp e corretores plantonistas.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setActiveTab('editar')}
-              className="px-3.5 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 transition-all flex items-center gap-1.5 cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Cadastrar Novo Lançamento</span>
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-2">
-            {/* Card 1 */}
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between gap-3 shadow-2xs">
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-blue-600">#DH-8842</span>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold border border-emerald-200">
-                    DLP 100% SEGURO
-                  </span>
-                </div>
-                <h4 className="text-base font-bold text-slate-900 mt-1">Reserva Jardim Barra</h4>
-                <p className="text-xs text-slate-500">Barra da Tijuca • 84m² a 114m² • A partir de R$ 980k</p>
-              </div>
-              <div className="flex items-center justify-between pt-2 border-t border-slate-200/60">
-                <span className="text-xs font-semibold text-emerald-700 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span> 38 Leads Ativos
-                </span>
-                <button
-                  onClick={() => setActiveTab('editar')}
-                  className="text-xs font-semibold text-blue-600 hover:underline cursor-pointer"
-                >
-                  Configurar & DLP →
-                </button>
-              </div>
-            </div>
-
-            {/* Card 2 */}
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between gap-3 shadow-2xs">
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-blue-600">#DH-7731</span>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold border border-emerald-200">
-                    DLP 100% SEGURO
-                  </span>
-                </div>
-                <h4 className="text-base font-bold text-slate-900 mt-1">Horizonte Leblon Residences</h4>
-                <p className="text-xs text-slate-500">Leblon • 140m² a 280m² • A partir de R$ 3.8M</p>
-              </div>
-              <div className="flex items-center justify-between pt-2 border-t border-slate-200/60">
-                <span className="text-xs font-semibold text-emerald-700 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span> 19 Leads Ativos
-                </span>
-                <button
-                  onClick={() => setActiveTab('editar')}
-                  className="text-xs font-semibold text-blue-600 hover:underline cursor-pointer"
-                >
-                  Configurar & DLP →
-                </button>
-              </div>
-            </div>
-
-            {/* Card 3 */}
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between gap-3 shadow-2xs">
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-blue-600">#DH-6420</span>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold border border-emerald-200">
-                    DLP 100% SEGURO
-                  </span>
-                </div>
-                <h4 className="text-base font-bold text-slate-900 mt-1">Grand Park Ipanema</h4>
-                <p className="text-xs text-slate-500">Ipanema • 110m² a 195m² • A partir de R$ 2.9M</p>
-              </div>
-              <div className="flex items-center justify-between pt-2 border-t border-slate-200/60">
-                <span className="text-xs font-semibold text-emerald-700 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span> 42 Leads Ativos
-                </span>
-                <button
-                  onClick={() => setActiveTab('editar')}
-                  className="text-xs font-semibold text-blue-600 hover:underline cursor-pointer"
-                >
-                  Configurar & DLP →
-                </button>
-              </div>
             </div>
           </div>
         </div>
@@ -1139,12 +1680,12 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
                   Resposta Gerada pelo Motor IA:
                 </span>
                 <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px] font-bold border border-rose-200">
-                  DLP ATIVOU: 2 BLOQUEIOS
+                  DLP ATIVOU: BLOQUEIO PREVENTIVO
                 </span>
               </div>
               <p className="text-xs text-slate-800 leading-relaxed">
-                "Olá! O <strong>Reserva Jardim Barra</strong> é um projeto comercializado com exclusividade pela{' '}
-                <strong>{companyName}</strong> na Barra da Tijuca. Para detalhes sobre o corpo técnico ou para agendar uma visita guiada às unidades modelo de 2 e 3 quartos, nosso corretor plantonista está disponível agora. Gostaria de receber o Book Comercial completo em PDF?"
+                "Olá! O <strong>{formData.nome || 'Lançamento'}</strong> é um projeto comercializado pela{' '}
+                <strong>{companyName}</strong> na região de {formData.bairro || 'destaque'}. Para informações técnicas detalhadas ou para agendar uma visita guiada às unidades modelo ({formData.tipologias || '2 e 3 quartos'}), nosso corretor especialista está à disposição. Deseja receber o Book Comercial completo em PDF?"
               </p>
             </div>
 
@@ -1188,7 +1729,7 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
               <button
                 type="button"
                 onClick={handleAddTag}
-                className="px-4 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
+                className="px-4 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 cursor-pointer"
               >
                 Adicionar
               </button>
@@ -1197,12 +1738,12 @@ export function LancamentosView({ companyName }: LancamentosViewProps) {
         </div>
       )}
 
-      {/* Toast Save Success */}
+      {/* Toast Save/Delete Success */}
       {saveSuccessMsg && (
         <div className="fixed bottom-6 right-6 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-2.5 z-50 animate-bounce">
-          <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+          <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
           <span className="text-xs font-semibold">
-            Lançamento salvo com sucesso e replicado nas instâncias WhatsApp!
+            {saveSuccessMsg}
           </span>
         </div>
       )}

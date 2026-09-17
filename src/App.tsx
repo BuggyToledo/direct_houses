@@ -615,7 +615,10 @@ export default function App() {
         )}
 
         {activeTab === 'lancamentos' && (
-          <LancamentosView companyName={settings.companyName} />
+          <LancamentosView
+            companyName={settings.companyName}
+            onLancamentosUpdated={fetchLancamentos}
+          />
         )}
 
         {activeTab === 'roleta' && (
