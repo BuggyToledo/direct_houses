@@ -1726,6 +1726,14 @@ app.all('/api/*', (req, res) => {
   res.status(404).json({ error: 'Endpoint não encontrado', path: req.path });
 });
 
+// Keep the process alive on unexpected errors (PM2 can still restart if it exits)
+process.on('unhandledRejection', (reason) => {
+  console.error('[Process] unhandledRejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Process] uncaughtException:', err);
+});
+
 // Vite middleware setup
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {

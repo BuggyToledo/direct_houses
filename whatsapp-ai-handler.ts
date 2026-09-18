@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import { whatsAppService, IncomingWhatsAppMessageEvent } from './whatsapp-service';
 import {
@@ -61,8 +63,66 @@ export interface WhatsAppChatSession {
   lastActivity: string;
 }
 
-// In-memory sessions store
+// Sessions store (memory + disk under .data)
 const sessions = new Map<string, WhatsAppChatSession>();
+const DATA_DIR = path.join(process.cwd(), '.data');
+const SESSIONS_FILE = path.join(DATA_DIR, 'whatsapp-sessions.json');
+let sessionsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function ensureSessionsDataDir() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+}
+
+function loadSessionsFromDisk() {
+  try {
+    ensureSessionsDataDir();
+    if (!fs.existsSync(SESSIONS_FILE)) return;
+    const raw = fs.readFileSync(SESSIONS_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return;
+    const entries: Array<[string, WhatsAppChatSession]> = Array.isArray(parsed)
+      ? parsed
+      : Object.entries(parsed);
+    let loaded = 0;
+    for (const [jid, session] of entries) {
+      if (jid && session && typeof session === 'object') {
+        sessions.set(jid, session as WhatsAppChatSession);
+        loaded++;
+      }
+    }
+    console.log(`💾 [WhatsApp AI] ${loaded} sessão(ões) restaurada(s) do disco`);
+  } catch (err) {
+    console.warn('⚠️ [WhatsApp AI] Falha ao carregar sessões do disco:', err);
+  }
+}
+
+function persistSessionsToDiskNow() {
+  try {
+    ensureSessionsDataDir();
+    const obj: Record<string, WhatsAppChatSession> = {};
+    for (const [jid, session] of sessions.entries()) {
+      obj[jid] = session;
+    }
+    const tmp = `${SESSIONS_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
+    fs.renameSync(tmp, SESSIONS_FILE);
+  } catch (err) {
+    console.warn('⚠️ [WhatsApp AI] Falha ao salvar sessões no disco:', err);
+  }
+}
+
+/** Debounced persist so we don't thrash disk on every message */
+function scheduleSessionsPersist() {
+  if (sessionsSaveTimer) clearTimeout(sessionsSaveTimer);
+  sessionsSaveTimer = setTimeout(() => {
+    sessionsSaveTimer = null;
+    persistSessionsToDiskNow();
+  }, 750);
+}
+
+loadSessionsFromDisk();
 
 // Initialize Google GenAI client
 function getGeminiClient(): GoogleGenAI | null {
@@ -851,6 +911,7 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
 
   // Extract structured lead data before generating response so state is updated
   extractLeadFromSession(session);
+  scheduleSessionsPersist();
 
   // Generate AI reply with candidate models fallback
   let replyText = '';
@@ -889,6 +950,9 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
   }
 
   // Anti-skip Safety Check: If AI generated premature closing before lead is fully qualified
+  // userText/userMessages must be scoped here (extractLeadFromSession keeps its own locals)
+  const userMessages = session.messages.filter((m) => m.role === 'user');
+  const userText = userMessages.map((m) => m.content).join(' ');
   const isAguardandoCorretor = session.extractedLead.tipoAtendimento === 'Aguardando contato do corretor';
   const isExplicitHuman = isAguardandoCorretor || /(falar\s*com\s*(um\s*)?(humano|corretor|pessoa|atendente)|passa(r)?\s*p(ra|ro)\s*(um\s*)?(humano|corretor|pessoa)|quero\s*(um\s*)?(humano|atendente)|chama(r)?\s*(um\s*)?corretor|\b1\b|\b6\b)/i.test(userText);
 
@@ -914,6 +978,7 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
     content: replyText,
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
   });
+  scheduleSessionsPersist();
 
   // 📲 Envio nativo de mídias (Fotos e Book PDF) pelo WhatsApp
   try {
@@ -1229,6 +1294,7 @@ async function checkInactiveSessions() {
             phone: chosenBroker.phone,
             assignedAt: new Date().toISOString(),
           };
+          scheduleSessionsPersist();
 
           const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
 
@@ -1280,6 +1346,16 @@ async function checkInactiveSessions() {
 
 // Check every 30 seconds
 setInterval(checkInactiveSessions, 30000);
+
+process.on('beforeExit', () => {
+  persistSessionsToDiskNow();
+});
+process.on('SIGTERM', () => {
+  persistSessionsToDiskNow();
+});
+process.on('SIGINT', () => {
+  persistSessionsToDiskNow();
+});
 
 // Hook message listener into WhatsApp service
 whatsAppService.onMessage(handleIncomingWhatsAppMessage);

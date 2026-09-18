@@ -70,7 +70,9 @@ class WhatsAppService {
   private messageHandlers: MessageHandler[] = [];
   private isConnecting: boolean = false;
   private reconnectAttempts: number = 0;
-  private maxReconnectAttempts: number = 5;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Backoff delays (ms). After the last entry, keep using it forever until loggedOut. */
+  private readonly reconnectBackoffMs: number[] = [2000, 5000, 15000, 30000, 60000];
 
   constructor() {
     this.ensureAuthDir();
@@ -97,10 +99,37 @@ class WhatsAppService {
     this.messageHandlers.push(handler);
   }
 
+  private clearReconnectTimer() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  private scheduleReconnect(reason: string) {
+    this.clearReconnectTimer();
+    const idx = Math.min(this.reconnectAttempts, this.reconnectBackoffMs.length - 1);
+    const delay = this.reconnectBackoffMs[idx];
+    this.reconnectAttempts++;
+    console.log(
+      `🔄 [WhatsApp] Reconexão agendada em ${delay}ms (tentativa ${this.reconnectAttempts}) — ${reason}`
+    );
+    this.state = 'connecting';
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect(false).catch((err) => {
+        console.error('[WhatsApp] Falha na reconexão agendada:', err);
+        this.scheduleReconnect('erro na connect()');
+      });
+    }, delay);
+  }
+
   public async connect(force: boolean = false): Promise<WhatsAppStatus> {
     if (!force && this.sock && this.state === 'connected') {
       return this.getStatus();
     }
+
+    this.clearReconnectTimer();
 
     // Always properly clean up any active socket before starting a new connection attempt
     if (this.sock) {
@@ -154,7 +183,14 @@ class WhatsAppService {
         version: [2, 3000, 1043857760] as [number, number, number],
       }));
 
-      const logger = pino({ level: 'silent' });
+      const logsDir = path.join(process.cwd(), '.data', 'logs');
+      if (!fs.existsSync(logsDir)) {
+        fs.mkdirSync(logsDir, { recursive: true });
+      }
+      const logger = pino(
+        { level: process.env.WA_LOG_LEVEL || 'warn' },
+        pino.destination({ dest: path.join(logsDir, 'baileys.log'), sync: false, mkdir: true })
+      );
       // Use macOS Desktop or Windows Desktop signature to prevent WhatsApp 405 Connection Failure on Linux
       const browserConfig = Browsers?.macOS ? Browsers.macOS('Desktop') : ['Mac OS', 'Desktop', '14.4.1'];
 
@@ -168,7 +204,7 @@ class WhatsAppService {
         },
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
-        markOnlineOnConnect: true,
+        markOnlineOnConnect: false,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 25000,
@@ -214,6 +250,7 @@ class WhatsAppService {
 
         if (connection === 'open') {
           clearTimeout(connectionTimeout);
+          this.clearReconnectTimer();
           this.state = 'connected';
           this.qrCodeDataUrl = null;
           this.isConnecting = false;
@@ -244,6 +281,7 @@ class WhatsAppService {
           }
 
           if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403) {
+            this.clearReconnectTimer();
             this.state = 'disconnected';
             this.connectedPhone = null;
             this.connectedName = null;
@@ -251,14 +289,7 @@ class WhatsAppService {
             this.errorMessage = 'Sessão encerrada no celular. Escaneie o QR Code novamente.';
             this.clearAuthDir();
           } else if (shouldReconnect) {
-            if (this.reconnectAttempts < this.maxReconnectAttempts) {
-              this.reconnectAttempts++;
-              console.log(`🔄 [WhatsApp] Tentando reconectar (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-              setTimeout(() => this.connect(false), 2500);
-            } else {
-              this.state = 'disconnected';
-              this.errorMessage = 'Conexão interrompida. Clique em "Atualizar QR Code" para reconectar.';
-            }
+            this.scheduleReconnect(`connection.close status=${statusCode}`);
           } else {
             this.state = 'disconnected';
           }
@@ -267,6 +298,7 @@ class WhatsAppService {
 
       // Handle Incoming Messages
       this.sock.ev.on('messages.upsert', async (chatUpdate: { messages: WAMessage[]; type: string }) => {
+        try {
         if (chatUpdate.type !== 'notify' && chatUpdate.type !== 'append') return;
 
         for (const msg of chatUpdate.messages) {
@@ -347,6 +379,9 @@ class WhatsAppService {
               console.error('Erro no processador de mensagem do WhatsApp:', handlerErr);
             }
           }
+        }
+        } catch (upsertErr) {
+          console.error('[WhatsApp] Erro não tratado em messages.upsert:', upsertErr);
         }
       });
 
