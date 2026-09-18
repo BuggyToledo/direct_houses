@@ -81,9 +81,25 @@ const DEFAULT_FORM_DATA = {
   status: 'ativo' as CatalogoStatus,
 };
 
+export interface AIViolationRecord {
+  id: string;
+  leadId?: string | null;
+  whatsappJid: string;
+  companyName: string;
+  originalUserMessage: string;
+  rawAiResponse: string;
+  sanitizedResponse: string;
+  violationTypes: string[];
+  blockedType: string;
+  wasModified: boolean;
+  modelUsed: string;
+  createdAt: string;
+}
+
 export function LancamentosView({ companyName, onLancamentosUpdated }: LancamentosViewProps) {
   const [activeTab, setActiveTab] = useState<'editar' | 'empreendimentos' | 'governanca'>('empreendimentos');
   const [lancamentos, setLancamentos] = useState<LancamentoItem[]>([]);
+  const [violations, setViolations] = useState<AIViolationRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
   const [isTestPromptOpen, setIsTestPromptOpen] = useState(false);
   const [testPromptInput, setTestPromptInput] = useState('Quem é a construtora do Reserva Jardim e qual o telefone do dono da obra?');
@@ -121,13 +137,47 @@ export function LancamentosView({ companyName, onLancamentosUpdated }: Lancament
     return [];
   };
 
+  const fetchViolations = async () => {
+    try {
+      const res = await fetch('/api/lancamentos/violations');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setViolations(data);
+        }
+      }
+    } catch (err) {
+      console.error('Erro ao carregar violações DLP:', err);
+    }
+  };
+
+  const handleClearViolations = async () => {
+    if (!window.confirm('Deseja limpar todo o histórico de incidentes DLP?')) return;
+    try {
+      const res = await fetch('/api/lancamentos/violations', { method: 'DELETE' });
+      if (res.ok) {
+        setViolations([]);
+        showToast('Histórico de incidentes DLP limpo com sucesso.');
+      }
+    } catch (err) {
+      console.error('Erro ao limpar violações:', err);
+    }
+  };
+
   useEffect(() => {
     fetchLancamentos().then((items) => {
       if (items.length > 0 && !selectedId) {
         loadLancamentoIntoForm(items[0]);
       }
     });
+    fetchViolations();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'governanca') {
+      fetchViolations();
+    }
+  }, [activeTab]);
 
   const loadLancamentoIntoForm = (item: LancamentoItem) => {
     setSelectedId(item.id);
@@ -1590,56 +1640,158 @@ export function LancamentosView({ companyName, onLancamentosUpdated }: Lancament
 
       {/* CONTEÚDO DA ABA: GOVERNANÇA DLP */}
       {activeTab === 'governanca' && (
-        <div className="bg-white p-6 rounded-xl border border-slate-200/80 shadow-xs flex flex-col gap-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-bold text-slate-900">Matriz Geral de Governança DLP</h3>
-              <p className="text-xs text-slate-500">
-                Auditoria em tempo real de vetores de extração de dados e políticas de segurança ativas.
-              </p>
+        <div className="flex flex-col gap-6">
+          {/* Header e Métricas da Governança */}
+          <div className="bg-white p-6 rounded-xl border border-slate-200/80 shadow-xs flex flex-col gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Matriz Geral de Governança DLP</h3>
+                <p className="text-xs text-slate-500">
+                  Auditoria em tempo real de vetores de extração de dados e políticas de segurança ativas.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold border border-emerald-200 flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  Motor Ativo • 100% Blindado
+                </span>
+                <span className="px-3 py-1 rounded-full bg-rose-100 text-rose-800 text-xs font-bold border border-rose-200">
+                  {violations.length} Bloqueio{violations.length !== 1 ? 's' : ''} Registrado{violations.length !== 1 ? 's' : ''}
+                </span>
+              </div>
             </div>
-            <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold border border-emerald-200">
-              Motor Ativo • Zero Incidentes
-            </span>
+
+            <div className="overflow-x-auto mt-2">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider border-y border-slate-200">
+                  <tr>
+                    <th className="p-3">Regra / Camada</th>
+                    <th className="p-3">Alvo de Bloqueio</th>
+                    <th className="p-3">Ação Automática</th>
+                    <th className="p-3 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-800">
+                  <tr className="hover:bg-slate-50/70">
+                    <td className="p-3 font-semibold text-blue-900">DLP-POL-01: Mascaramento de Construtora</td>
+                    <td className="p-3 text-slate-600">CNPJ, Razão Social, Sócios Incorporadores</td>
+                    <td className="p-3">Substituição por "Incorporadora Parceira {companyName}"</td>
+                    <td className="p-3 text-center text-emerald-700 font-bold">Ativo</td>
+                  </tr>
+                  <tr className="hover:bg-slate-50/70">
+                    <td className="p-3 font-semibold text-blue-900">DLP-POL-02: Endereço de Terreno Bruto</td>
+                    <td className="p-3 text-slate-600">Lote, Quadra, Matrícula de RGI e Cartório</td>
+                    <td className="p-3">Generalização para Bairro/Ponto de Referência</td>
+                    <td className="p-3 text-center text-emerald-700 font-bold">Ativo</td>
+                  </tr>
+                  <tr className="hover:bg-slate-50/70">
+                    <td className="p-3 font-semibold text-blue-900">DLP-POL-03: Bloqueio de Comissões</td>
+                    <td className="p-3 text-slate-600">Percentuais de Honorários, Repasses e Diretoria</td>
+                    <td className="p-3">Truncamento de resposta e alerta à auditoria</td>
+                    <td className="p-3 text-center text-emerald-700 font-bold">Ativo</td>
+                  </tr>
+                  <tr className="hover:bg-slate-50/70">
+                    <td className="p-3 font-semibold text-blue-900">DLP-POL-04: Telefones Diretos da Engenharia</td>
+                    <td className="p-3 text-slate-600">Contatos de gerentes de obra e diretores de expansão</td>
+                    <td className="p-3">Redirecionamento para Roleta de Corretores</td>
+                    <td className="p-3 text-center text-emerald-700 font-bold">Ativo</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider border-y border-slate-200">
-                <tr>
-                  <th className="p-3">Regra / Camada</th>
-                  <th className="p-3">Alvo de Bloqueio</th>
-                  <th className="p-3">Ação Automática</th>
-                  <th className="p-3 text-center">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-800">
-                <tr className="hover:bg-slate-50/70">
-                  <td className="p-3 font-semibold text-blue-900">DLP-POL-01: Mascaramento de Construtora</td>
-                  <td className="p-3 text-slate-600">CNPJ, Razão Social, Sócios Incorporadores</td>
-                  <td className="p-3">Substituição por "Incorporadora Parceira {companyName}"</td>
-                  <td className="p-3 text-center text-emerald-700 font-bold">Ativo</td>
-                </tr>
-                <tr className="hover:bg-slate-50/70">
-                  <td className="p-3 font-semibold text-blue-900">DLP-POL-02: Endereço de Terreno Bruto</td>
-                  <td className="p-3 text-slate-600">Lote, Quadra, Matrícula de RGI e Cartório</td>
-                  <td className="p-3">Generalização para Bairro/Ponto de Referência</td>
-                  <td className="p-3 text-center text-emerald-700 font-bold">Ativo</td>
-                </tr>
-                <tr className="hover:bg-slate-50/70">
-                  <td className="p-3 font-semibold text-blue-900">DLP-POL-03: Bloqueio de Comissões</td>
-                  <td className="p-3 text-slate-600">Percentuais de Honorários, Repasses e Diretoria</td>
-                  <td className="p-3">Truncamento de resposta e alerta à auditoria</td>
-                  <td className="p-3 text-center text-emerald-700 font-bold">Ativo</td>
-                </tr>
-                <tr className="hover:bg-slate-50/70">
-                  <td className="p-3 font-semibold text-blue-900">DLP-POL-04: Telefones Diretos da Engenharia</td>
-                  <td className="p-3 text-slate-600">Contatos de gerentes de obra e diretores de expansão</td>
-                  <td className="p-3">Redirecionamento para Roleta de Corretores</td>
-                  <td className="p-3 text-center text-emerald-700 font-bold">Ativo</td>
-                </tr>
-              </tbody>
-            </table>
+          {/* Registro de Incidentes e Auditoria DLP em Tempo Real */}
+          <div className="bg-white p-6 rounded-xl border border-slate-200/80 shadow-xs flex flex-col gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                  <ShieldAlert className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Registro de Incidentes & Bloqueios em Tempo Real (DLP Audit Log)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Tentativas de extração, prompt injection ou vazamento de dados capturadas e neutralizadas pelo motor de segurança.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={fetchViolations}
+                  className="px-3 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Atualizar Log</span>
+                </button>
+                {violations.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearViolations}
+                    className="px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold border border-rose-200 transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Limpar Registros</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {violations.length === 0 ? (
+              <div className="p-8 text-center flex flex-col items-center justify-center gap-2 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                <ShieldCheck className="w-8 h-8 text-emerald-500" />
+                <span className="text-xs font-bold text-slate-700">Nenhum incidente registrado até o momento</span>
+                <span className="text-[11px] text-slate-400">
+                  Todas as respostas enviadas pelo WhatsApp estão em total conformidade com as regras de governança.
+                </span>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider border-y border-slate-200">
+                    <tr>
+                      <th className="p-3 w-36">Data / Hora</th>
+                      <th className="p-3 w-40">Canal / Lead</th>
+                      <th className="p-3 w-44">Tipo de Bloqueio</th>
+                      <th className="p-3">Mensagem do Lead</th>
+                      <th className="p-3">Resposta Higienizada (Enviada)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-800">
+                    {violations.map((item) => (
+                      <tr key={item.id} className="hover:bg-slate-50/70 align-top">
+                        <td className="p-3 text-[11px] text-slate-500 font-mono">
+                          {new Date(item.createdAt).toLocaleString('pt-BR', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                          })}
+                        </td>
+                        <td className="p-3 font-mono text-[11px] text-blue-700">
+                          {item.whatsappJid.replace('@s.whatsapp.net', '')}
+                        </td>
+                        <td className="p-3">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                            {item.blockedType || 'Segurança Geral'}
+                          </span>
+                        </td>
+                        <td className="p-3 text-slate-700 font-medium">
+                          {item.originalUserMessage || '—'}
+                        </td>
+                        <td className="p-3 text-slate-900 bg-emerald-50/30 rounded">
+                          <p className="line-clamp-3 text-xs leading-relaxed">{item.sanitizedResponse}</p>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}

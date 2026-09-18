@@ -962,10 +962,16 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
   }
 
   // 🛡️ Data Loss Prevention (DLP) & Filtro de Governança de Saída:
-  const governanceAudit = sanitizeAndAuditAIResponse(replyText, messageText, companyName);
+  const governanceAudit = sanitizeAndAuditAIResponse(replyText, {
+    userPrompt: messageText,
+    companyName,
+    whatsappJid: session.jid,
+    leadId: session.extractedLead?.nome ? `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}` : null,
+    modelUsed: 'gemini-2.5-flash',
+  });
   if (governanceAudit.wasModified) {
     console.warn(
-      `🛡️ [Governança Direct House] Resposta filtrada e higienizada. Violações:`,
+      `🛡️ [Governança ${companyName}] Resposta filtrada e higienizada. Violações:`,
       governanceAudit.violationsDetected
     );
     replyText = governanceAudit.sanitizedText;

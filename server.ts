@@ -60,6 +60,8 @@ import {
   getPublicLancamentosForAI,
   runGovernanceSecurityTests,
   sanitizeAndAuditAIResponse,
+  getAIViolations,
+  clearAIViolations,
 } from './lancamentos-service';
 
 dotenv.config();
@@ -1464,6 +1466,25 @@ app.post('/api/lancamentos/simulate-audit', (req, res) => {
       companyName || 'Direct Houses'
     );
     res.json(audit);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Lista o histórico de violações e tentativas de vazamento bloqueadas pela IA (DLP Audit Log)
+app.get('/api/lancamentos/violations', (req, res) => {
+  try {
+    res.json(getAIViolations());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Limpa o registro de violações de IA
+app.delete('/api/lancamentos/violations', (req, res) => {
+  try {
+    clearAIViolations();
+    res.json({ success: true, message: 'Log de violações DLP limpo com sucesso.' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

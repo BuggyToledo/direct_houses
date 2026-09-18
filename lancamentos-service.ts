@@ -627,175 +627,317 @@ export function deleteLancamento(id: string): boolean {
  * não significa que ela possa ser divulgada.
  * A IA deve sempre separar: "Conhecer" ≠ "Poder divulgar".
  */
+export interface AIViolationRecord {
+  id: string;
+  leadId?: string | null;
+  whatsappJid: string;
+  companyName: string;
+  originalUserMessage: string;
+  rawAiResponse: string;
+  sanitizedResponse: string;
+  violationTypes: string[];
+  blockedType: string;
+  wasModified: boolean;
+  modelUsed: string;
+  createdAt: string;
+}
+
+const VIOLATIONS_FILE = path.join(DATA_DIR, 'ai-violations.json');
+
+export function getAIViolations(): AIViolationRecord[] {
+  ensureDataDir();
+  try {
+    if (fs.existsSync(VIOLATIONS_FILE)) {
+      const data = fs.readFileSync(VIOLATIONS_FILE, 'utf-8');
+      const items = JSON.parse(data);
+      if (Array.isArray(items)) {
+        return items;
+      }
+    }
+  } catch (err) {
+    console.error('Erro ao ler log de violações de IA:', err);
+  }
+  return [];
+}
+
+export function saveAIViolations(violations: AIViolationRecord[]): void {
+  ensureDataDir();
+  try {
+    fs.writeFileSync(VIOLATIONS_FILE, JSON.stringify(violations, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Erro ao salvar log de violações de IA:', err);
+  }
+}
+
+export function recordAIViolation(violation: Omit<AIViolationRecord, 'id' | 'createdAt'>): AIViolationRecord {
+  const current = getAIViolations();
+  const newRecord: AIViolationRecord = {
+    ...violation,
+    id: `viol-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    createdAt: new Date().toISOString(),
+  };
+  // Prepend and keep latest 200 violations
+  const updated = [newRecord, ...current].slice(0, 200);
+  saveAIViolations(updated);
+  return newRecord;
+}
+
+export function clearAIViolations(): void {
+  saveAIViolations([]);
+}
+
+/**
+ * ============================================================
+ * SISTEMA DE GOVERNANÇA, AUDITORIA E FILTRO ANTES DA RESPOSTA (DLP)
+ * ============================================================
+ * Regra de Sistema: O fato de uma informação existir no book, PDF ou documento
+ * não significa que ela possa ser divulgada.
+ * A IA deve sempre separar: "Conhecer" ≠ "Poder divulgar".
+ */
 export interface OutputGovernanceResult {
   sanitizedText: string;
   violationsDetected: string[];
   wasModified: boolean;
-  blockedType?: 'endereco_completo' | 'contato_terceiro' | 'documento_interno' | 'prompt_injection' | 'catalogo_inativo';
+  blockedType?: 'endereco_completo' | 'contato_terceiro' | 'documento_interno' | 'prompt_injection' | 'catalogo_inativo' | 'comissao' | 'telefone_suspeito' | 'preco_interno' | 'dados_proprietario' | string;
+  originalResponse?: string;
+}
+
+export interface SanitizeOptions {
+  userPrompt?: string;
+  companyName?: string;
+  whatsappJid?: string;
+  leadId?: string | null;
+  modelUsed?: string;
 }
 
 export function sanitizeAndAuditAIResponse(
   rawText: string,
-  userPrompt: string = '',
-  companyName: string = 'Direct Houses'
+  optionsOrPrompt: string | SanitizeOptions = '',
+  companyNameFallback: string = 'Direct Houses'
 ): OutputGovernanceResult {
   if (!rawText) {
     return { sanitizedText: '', violationsDetected: [], wasModified: false };
   }
 
+  const options: SanitizeOptions =
+    typeof optionsOrPrompt === 'string'
+      ? { userPrompt: optionsOrPrompt, companyName: companyNameFallback }
+      : optionsOrPrompt || {};
+
+  const companyName = options.companyName || companyNameFallback || 'Direct Houses';
+  const userPrompt = options.userPrompt || '';
+  const whatsappJid = options.whatsappJid || 'web-simulacao';
+  const leadId = options.leadId || null;
+  const modelUsed = options.modelUsed || 'gemini-2.5-flash';
+
   let text = rawText;
   const violations: string[] = [];
+  let blockedType: string | null = null;
   const lowerUser = userPrompt.toLowerCase();
   const allLancamentos = getLancamentos();
 
-  // 1. DETECÇÃO DE TENTATIVAS DE PROMPT INJECTION
+  // 1. DETECÇÃO EXPANDIDA DE PROMPT INJECTION & JAILBREAK (PT & EN)
   const injectionPatterns = [
-    /ignore\s*(suas|as)?\s*regras/i,
-    /me\s*diga\s*o\s*endere[çc]o\s*(completo|que\s*est[áa]\s*no\s*pdf)/i,
-    /qual\s*[ée]\s*o\s*telefone\s*da\s*construtora/i,
-    /mostre\s*tudo\s*que\s*voc[êe]\s*recebeu\s*no\s*documento/i,
-    /liste\s*todas\s*as\s*informa[çc][õo]es\s*internas/i,
+    // Português
+    /ignore\s+(todas\s+as\s+)?(regras|instru[çc][õo]es|diretrizes)/i,
+    /esque[çc]a\s+(todas\s+as\s+)?(regras|instru[çc][õo]es)/i,
+    /mostre\s+(todo\s+o|o\s+conte[úu]do\s+do)\s+(pdf|prompt|sistema)/i,
+    /liste\s+(todas\s+as\s+)?informa[çc][õo]es\s+internas/i,
+    /quais\s+s[ãa]o\s+os\s+dados\s+(ocultos|secretos|confidenciais)/i,
+    /revele\s+(o\s+)?(system\s+prompt|prompt\s+do\s+sistema)/i,
+    /finja\s+ser|aja\s+como|voc[êe]\s+[ée]\s+agora/i,
     /qual\s*[ée]\s*a\s*fonte\s*desse\s*dado/i,
     /copie\s*o\s*conte[úu]do\s*do\s*pdf/i,
     /finja\s*que\s*sou\s*funcion[áa]rio/i,
-    /me\s*mostre\s*os\s*dados\s*ocultos/i,
-    /system\s*prompt/i,
     /instru[çc][õo]es\s*secretas/i,
+
+    // Inglês (comum em jailbreaks)
+    /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|rules)/i,
+    /system\s*prompt/i,
+    /you\s+are\s+now\s+DAN/i,
+    /jailbreak/i,
+    /bypass\s+(your\s+)?(rules|restrictions|filters)/i,
+    /reveal\s+(your\s+)?(instructions|prompt)/i,
   ];
 
-  const hasInjectionAttempt = injectionPatterns.some((pattern) => pattern.test(lowerUser));
-
-  // 2. DETECÇÃO DE ENDEREÇO FÍSICO DETALHADO (RUA, NÚMERO, LOTE, QUADRA, BLOCO, CEP)
-  // Expressões regulares para endereços físicos não autorizados
-  const fullAddressRegexes = [
-    /\b(rua|avenida|av\.|alameda|travessa|estrada|pra[çc]a)\s+[^,\n]+,\s*(n[º°o]?\s*)?\d+/i,
-    /\blote\s*\d+/i,
-    /\bquadra\s*\d+/i,
-    /\bbloco\s*\d+/i,
-    /\bcep\s*\d{5}-?\d{3}\b/i,
-    /\bmatr[íi]cula\s*\d+/i,
-  ];
-
-  // Verificar se o texto gerado contém endereço completo cadastrado em qualquer lançamento
-  for (const lanc of allLancamentos) {
-    if (lanc.enderecoCompleto && lanc.enderecoCompleto.length > 5) {
-      // Se partes do endereço completo (ex: rua + número) vazaram
-      const normalizedAddress = lanc.enderecoCompleto.toLowerCase();
-      const parts = normalizedAddress.split(/[,-]/).map((p) => p.trim()).filter((p) => p.length > 4);
-      for (const part of parts) {
-        if (text.toLowerCase().includes(part) && !text.toLowerCase().includes(lanc.bairro.toLowerCase())) {
-          violations.push(`Vazamento de trecho de endereço interno: "${part}"`);
-        }
-      }
-    }
-
-    // Verificar se vazou telefone da construtora
-    if (lanc.telefoneConstrutora) {
-      const cleanTel = lanc.telefoneConstrutora.replace(/\D/g, '');
-      if (cleanTel.length >= 8 && text.replace(/\D/g, '').includes(cleanTel)) {
-        violations.push(`Vazamento de telefone de construtora/incorporadora (${lanc.telefoneConstrutora})`);
-      }
-    }
-
-    // Verificar se vazou email da construtora
-    if (lanc.emailConstrutora && text.toLowerCase().includes(lanc.emailConstrutora.toLowerCase())) {
-      violations.push(`Vazamento de e-mail de construtora (${lanc.emailConstrutora})`);
-    }
-
-    // Verificar se o usuário perguntou sobre um empreendimento INATIVO
-    if (lanc.status !== 'ativo' && lowerUser.includes(lanc.nome.toLowerCase())) {
-      violations.push(`Tentativa de recomendação de catálogo INATIVO ("${lanc.nome}" - Status: ${lanc.status})`);
-      return {
-        sanitizedText: `Esse empreendimento não está com comercialização ativa no momento pela ${companyName}. Temos outras excelentes oportunidades de lançamentos na região! Gostaria de conhecer as opções disponíveis?`,
-        violationsDetected: violations,
-        wasModified: true,
-        blockedType: 'catalogo_inativo',
-      };
-    }
-  }
-
-  // 3. DETECÇÃO DE PADRÕES GERAIS DE VAZAMENTO
-  for (const regex of fullAddressRegexes) {
-    if (regex.test(text)) {
-      violations.push(`Padrão de endereço físico completo detectado pela auditoria de governança`);
+  for (const pattern of injectionPatterns) {
+    if (pattern.test(lowerUser) || pattern.test(text)) {
+      violations.push('Tentativa de prompt injection ou quebra de diretrizes detectada');
+      blockedType = 'prompt_injection';
       break;
     }
   }
 
-  // 4. DETECÇÃO DE REFERÊNCIAS A DOCUMENTOS/PDFs INTERNOS
-  const internalDocPattern = /\b(no\s+pdf|conforme\s+o\s+book\s+da\s+construtora|documento\s+interno|material\s+confidencial|\.pdf\b)/i;
-  if (internalDocPattern.test(text)) {
-    violations.push(`Menção a arquivo interno ou fonte confidencial não autorizada`);
+  // 2. DETECÇÃO DE ENDEREÇOS FÍSICOS COMPLETOS, LOTES, QUADRAS, BLOCOS E CEPs
+  const fullAddressRegexes = [
+    /\b(rua|avenida|av\.|alameda|travessa|estrada|pra[çc]a|rodovia)\s+[^,\n]{3,80},\s*(n[º°o]?\s*)?\d{1,6}/i,
+    /\blote\s*\d+/i,
+    /\bquadra\s*\d+/i,
+    /\bbloco\s*[A-Z0-9]+/i,
+    /\bcep\s*\d{5}-?\d{3}\b/i,
+    /\bmatr[íi]cula\s*(n[º°o]?\s*)?\d+/i,
+    /\bn[º°o]\s*\d{1,6}\s*(apto|apartamento|casa|sala)?/i,
+  ];
+
+  for (const regex of fullAddressRegexes) {
+    if (regex.test(text)) {
+      violations.push('Padrão de endereço físico completo / lote / matrícula detectado');
+      if (!blockedType) blockedType = 'endereco_completo';
+      break;
+    }
   }
 
-  // 5. DETECÇÃO DE INTENÇÃO DO CLIENTE SOLICITANDO DADOS BLOQUEADOS
-  const requestsAddress =
-    /(endere[çc]o\s*completo|qual\s*(é|e\s*)?(o\s*)?endere[çc]o|qual\s*(é|e\s*)?[àa]\s*rua|rua\s*e\s*(o\s*)?n[úu]mero|n[úu]mero\s*(exato|do\s*im[óo]vel)|qual\s*o\s*cep|lote\s*e\s*quadra)/i.test(
-      lowerUser
-    );
+  // 3. DETECÇÃO DE TERMOS SENSÍVEIS (CONTATO DE TERCEIRO, TELEFONES SOLTOS, COMISSÕES, PREÇO INTERNO, DADOS DE PROPRIETÁRIO)
+  const sensitiveTerms = [
+    {
+      pattern: /\b(telefone|celular|whatsapp|e-?mail|contato)\s+(da\s+)?(construtora|incorporadora|propriet[aá]rio|dono|engenheiro)/i,
+      type: 'contato_terceiro',
+      label: 'Contato de construtora/terceiro não autorizado',
+    },
+    {
+      pattern: /\b\d{2}\s?\d{4,5}-?\d{4}\b/,
+      type: 'telefone_suspeito',
+      label: 'Número de telefone externo solto na resposta',
+    },
+    {
+      pattern: /\b(comiss[ãa]o|percentual\s+de\s+venda|taxa\s+de\s+administra[çc][ãa]o|honor[áa]rios\s+de\s+corretagem)\b/i,
+      type: 'comissao',
+      label: 'Menção a percentual de comissão ou honorários internos',
+    },
+    {
+      pattern: /\b(tabela\s+interna|pre[çc]o\s+n[ãa]o\s+publicado|valor\s+n[ãa]o\s+autorizado|espelho\s+de\s+vendas)\b/i,
+      type: 'preco_interno',
+      label: 'Menção a tabela interna de preços confidencial',
+    },
+    {
+      pattern: /\b(propriet[aá]rio|dono\s+do\s+im[oó]vel|nome\s+do\s+vendedor|s[óo]cio\s+incorporador)\b/i,
+      type: 'dados_proprietario',
+      label: 'Menção a dados de proprietário ou sócio',
+    },
+    {
+      pattern: /\b(no\s+pdf|conforme\s+o\s+book\s+da\s+construtora|documento\s+interno|material\s+confidencial|\.pdf\b)/i,
+      type: 'documento_interno',
+      label: 'Menção a documento ou arquivo interno não público',
+    },
+  ];
 
-  const requestsConstructorContact =
-    /(telefone\s*(da|do)?\s*(construtora|incorporadora|vendas)|contato\s*(da|do)?\s*(construtora|incorporadora)|e-?mail\s*(da|do)?\s*(construtora|incorporadora)|central\s*de\s*vendas\s*(da|do)?\s*(construtora|incorporadora)|falar\s*com\s*a\s*construtora)/i.test(
-      lowerUser
-    );
+  for (const item of sensitiveTerms) {
+    if (item.pattern.test(text) || item.pattern.test(lowerUser)) {
+      violations.push(item.label);
+      if (!blockedType) blockedType = item.type;
+    }
+  }
 
-  const requestsInternalNotes =
-    /(comiss[ãa]o|nota\s*interna|documento\s*confidencial|book\s*confidencial|conte[úu]do\s*do\s*pdf|informa[çc][õo]es\s*internas|dados\s*ocultos|todas\s*as\s*informa[çc][õo]es\s*do\s*pdf)/i.test(
-      lowerUser
-    );
+  // 4. VERIFICAÇÃO CONTRA A BASE REAL DE LANÇAMENTOS CADASTRADOS (NÍVEL 3)
+  for (const lanc of allLancamentos) {
+    // Endereço completo específico
+    if (lanc.enderecoCompleto && lanc.enderecoCompleto.length > 5) {
+      const parts = lanc.enderecoCompleto
+        .toLowerCase()
+        .split(/[,-]/)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 4);
+      for (const part of parts) {
+        if (text.toLowerCase().includes(part) && !text.toLowerCase().includes(lanc.bairro.toLowerCase())) {
+          violations.push(`Vazamento de trecho de endereço interno cadastrado: "${part}"`);
+          if (!blockedType) blockedType = 'endereco_completo';
+        }
+      }
+    }
 
-  // SE HOUVER VIOLAÇÃO OU PEDIDO DE ENDEREÇO COMPLETO:
-  if (
-    requestsAddress ||
-    violations.some((v) => v.includes('endereço') || v.includes('endereço interno')) ||
-    (hasInjectionAttempt && (lowerUser.includes('endereço') || lowerUser.includes('endereco') || lowerUser.includes('rua') || lowerUser.includes('número') || lowerUser.includes('numero')))
-  ) {
-    return {
-      sanitizedText:
+    // Telefone da construtora cadastrado
+    if (lanc.telefoneConstrutora) {
+      const cleanTel = lanc.telefoneConstrutora.replace(/\D/g, '');
+      if (cleanTel.length >= 8 && text.replace(/\D/g, '').includes(cleanTel)) {
+        violations.push(`Vazamento de telefone direto de construtora (${lanc.telefoneConstrutora})`);
+        if (!blockedType) blockedType = 'contato_terceiro';
+      }
+    }
+
+    // E-mail da construtora cadastrado
+    if (lanc.emailConstrutora && text.toLowerCase().includes(lanc.emailConstrutora.toLowerCase())) {
+      violations.push(`Vazamento de e-mail de construtora (${lanc.emailConstrutora})`);
+      if (!blockedType) blockedType = 'contato_terceiro';
+    }
+
+    // Catálogo Inativo
+    if (lanc.status !== 'ativo' && lowerUser.includes(lanc.nome.toLowerCase())) {
+      violations.push(`Tentativa de recomendação de catálogo INATIVO ("${lanc.nome}" - Status: ${lanc.status})`);
+      blockedType = 'catalogo_inativo';
+      const sanitized = `Esse empreendimento não está com comercialização ativa no momento pela ${companyName}. Temos outras excelentes oportunidades de lançamentos na região! Gostaria de conhecer as opções disponíveis?`;
+
+      // Log do incidente
+      recordAIViolation({
+        leadId,
+        whatsappJid,
+        companyName,
+        originalUserMessage: userPrompt,
+        rawAiResponse: rawText,
+        sanitizedResponse: sanitized,
+        violationTypes: violations,
+        blockedType: 'catalogo_inativo',
+        wasModified: true,
+        modelUsed,
+      });
+
+      return {
+        sanitizedText: sanitized,
+        violationsDetected: violations,
+        wasModified: true,
+        blockedType: 'catalogo_inativo',
+        originalResponse: rawText,
+      };
+    }
+  }
+
+  // 5. REDAÇÃO / SANITIZAÇÃO CONTEXTUAL
+  let wasModified = false;
+  if (violations.length > 0 || blockedType) {
+    wasModified = true;
+
+    if (blockedType === 'endereco_completo') {
+      text =
         `Posso te informar a região e os principais pontos de referência divulgados pela ${companyName}. ` +
-        `Para sua segurança e comodidade, posso solicitar agora mesmo que um de nossos consultores especializados te passe todos os detalhes e agende uma apresentação.`,
-      violationsDetected: violations.length > 0 ? violations : ['Bloqueio preventivo de solicitação de endereço completo'],
-      wasModified: true,
-      blockedType: 'endereco_completo',
-    };
-  }
-
-  // SE HOUVER VIOLAÇÃO OU PEDIDO DE TELEFONE OU CONTATO DE TERCEIRO:
-  if (
-    requestsConstructorContact ||
-    violations.some((v) => v.includes('telefone') || v.includes('e-mail') || v.includes('construtora')) ||
-    (hasInjectionAttempt && (lowerUser.includes('telefone') || lowerUser.includes('contato') || lowerUser.includes('email') || lowerUser.includes('e-mail')))
-  ) {
-    return {
-      sanitizedText:
-        `O atendimento e a representação oficial desse empreendimento são realizados pela ${companyName}. ` +
-        `Estou à disposição para te passar todas as características do projeto ou posso agendar para que um de nossos consultores entre em contato com você agora mesmo.`,
-      violationsDetected: violations.length > 0 ? violations : ['Bloqueio preventivo de contato de construtora/terceiro'],
-      wasModified: true,
-      blockedType: 'contato_terceiro',
-    };
-  }
-
-  // SE HOUVER TENTATIVA DE PROMPT INJECTION OU ACESSO A DADOS INTERNOS / PDF
-  if (
-    requestsInternalNotes ||
-    hasInjectionAttempt ||
-    violations.some((v) => v.includes('documento') || v.includes('confidencial'))
-  ) {
-    return {
-      sanitizedText:
+        `Para sua segurança e comodidade, posso solicitar agora mesmo que um de nossos consultores especializados te passe todos os detalhes e agende uma apresentação.`;
+    } else if (blockedType === 'contato_terceiro' || blockedType === 'telefone_suspeito') {
+      text =
+        `O atendimento e a representação oficial desse empreendimento são realizados exclusivamente pela ${companyName}. ` +
+        `Estou à disposição para te passar todas as características do projeto ou posso agendar para que um de nossos consultores entre em contato com você agora mesmo.`;
+    } else if (blockedType === 'prompt_injection') {
+      text =
+        `Desculpe, não posso atender a esse tipo de solicitação. ` +
+        `Posso te ajudar com informações sobre os empreendimentos, tipologias, valores autorizados ou agendar um consultor para você.`;
+    } else if (blockedType === 'comissao' || blockedType === 'preco_interno' || blockedType === 'dados_proprietario') {
+      text =
+        `Essa informação é de uso interno. ` +
+        `Posso te ajudar com as características públicas do empreendimento ou encaminhar você para um de nossos consultores.`;
+    } else {
+      text =
         `As informações públicas e o atendimento deste empreendimento são centralizados pela ${companyName}. ` +
-        `Posso te apresentar as tipologias, diferenciais, lazer e condições comerciais autorizadas, ou solicitar o contato direto de um consultor especialista.`,
-      violationsDetected: violations.length > 0 ? violations : ['Tentativa de acesso a dados internos ou prompt injection neutralizada'],
+        `Posso te apresentar as tipologias, diferenciais, lazer e condições comerciais autorizadas, ou solicitar o contato direto de um consultor especialista.`;
+    }
+
+    // Persistir o incidente no registro de auditoria DLP
+    recordAIViolation({
+      leadId,
+      whatsappJid,
+      companyName,
+      originalUserMessage: userPrompt,
+      rawAiResponse: rawText,
+      sanitizedResponse: text,
+      violationTypes: [...new Set(violations)],
+      blockedType: blockedType || 'seguranca_geral',
       wasModified: true,
-      blockedType: 'prompt_injection',
-    };
+      modelUsed,
+    });
   }
 
   return {
     sanitizedText: text,
-    violationsDetected: [],
-    wasModified: false,
+    violationsDetected: [...new Set(violations)],
+    wasModified,
+    blockedType: blockedType || undefined,
+    originalResponse: wasModified ? rawText : undefined,
   };
 }
 
