@@ -388,7 +388,7 @@ function buildSystemPrompt(session: WhatsAppChatSession, companyName: string = '
   const hasValidPhone = isValidPhoneNumber(session.phone);
   const telefoneCliente = hasValidPhone ? formatPhoneForDisplay(session.phone) : 'Pendente de validação';
 
-  const codigoImovel = session.extractedLead.codigoImovel || session.extractedLead.selectedLancamentoNome || session.extractedLead.produtoImovel || 'Não informado';
+  const codigoImovel = session.extractedLead.codigoImovel || session.extractedLead.selectedLancamentoNome || 'Não informado';
   const linkImovel = session.extractedLead.linkImovel || 'Link não informado';
   const intencaoAtual = session.extractedLead.intencaoAtual || 'Pendente de identificação';
   const estadoAtendimento = session.extractedLead.estadoAtendimento || 'cadastro';
@@ -656,7 +656,7 @@ function getFallbackReply(
   if (propInfo.code && !session.extractedLead.codigoImovel) session.extractedLead.codigoImovel = propInfo.code;
   if (propInfo.link && !session.extractedLead.linkImovel) session.extractedLead.linkImovel = propInfo.link;
 
-  const codigoImovel = session.extractedLead.codigoImovel || session.extractedLead.selectedLancamentoNome || session.extractedLead.produtoImovel || 'Não informado';
+  const codigoImovel = session.extractedLead.codigoImovel || session.extractedLead.selectedLancamentoNome || 'Não informado';
   const linkImovel = session.extractedLead.linkImovel || 'Link não informado';
 
   // Extract ongoing collected information
@@ -786,15 +786,34 @@ function getFallbackReply(
     session.extractedLead.estadoAtendimento = 'respondendo_duvida';
     session.extractedLead.tipoAtendimento = 'Dúvidas sobre Imóvel';
 
-    if (!info.duvidaTexto && userMsgs.length <= 2) {
-      return `Claro. Escreva sua dúvida em uma única mensagem. Posso ajudar com informações sobre o imóvel, localização, documentação, financiamento, valores ou processo de compra e aluguel.`;
+    const isJustOption4 = /^(4|d[uú]vida|tirar\s+uma?\s+d[uú]vida)$/i.test(lastUserMsg);
+    if (isJustOption4 && !info.duvidaTexto) {
+      return `Claro, ${session.name}! Qual é a sua dúvida sobre o imóvel ou sobre as condições de compra? Pode escrever aqui que te respondo na hora. 😊`;
+    }
+
+    const matchedLanc = activeLanc.find(
+      (l) =>
+        lowerLastMsg.includes(l.nome.toLowerCase()) ||
+        (codigoImovel !== 'Não informado' && l.nome.toLowerCase().includes(codigoImovel.toLowerCase()))
+    );
+
+    if (matchedLanc) {
+      if (/pre[çc]o|valor|quanto\s+custa|tabela|entrada/i.test(lowerLastMsg)) {
+        return `O *${matchedLanc.nome}* possui unidades a partir de *${matchedLanc.precoAPartirDe || 'sob consulta'}* com tipologias ${matchedLanc.tipologias}. Condições: ${matchedLanc.condicoesComerciais || 'Consulte nosso corretor'}.\n\nGostaria de ver as fotos e plantas ou prefere agendar uma apresentação?`;
+      }
+      if (/onde\s+fica|localiza[çc][ãa]o|bairro|endere[çc]o/i.test(lowerLastMsg)) {
+        return `O *${matchedLanc.nome}* fica localizado na região nobre de *${matchedLanc.bairro}* (${matchedLanc.localidade || matchedLanc.cidade}).\n\nDeseja receber os detalhes das unidades disponíveis?`;
+      }
+      if (/lazer|diferencia(l|is)|piscina|academia|vaga/i.test(lowerLastMsg)) {
+        return `Os principais diferenciais do *${matchedLanc.nome}* são: ${matchedLanc.diferenciais}.\n\nQuer que eu te envie as fotos das áreas comuns?`;
+      }
     }
 
     info.duvidaTexto = lastUserMsg;
     session.extractedLead.isComplete = true;
     return (
-      `Registrei sua dúvida: "${lastUserMsg}".\n\n` +
-      `Essa possibilidade depende da documentação do imóvel, das condições da negociação e da análise do comprador. O consultor responsável da ${companyName} precisa confirmar essa informação com exatidão. Já encaminhei sua dúvida para ele, que te responderá por aqui em instantes!`
+      `Registrei sua pergunta sobre "${lastUserMsg}".\n\n` +
+      `Para te passar todos os detalhes e valores atualizados com precisão, nosso consultor responsável da ${companyName} entrará em contato com você por aqui em instantes!`
     );
   }
 
@@ -876,8 +895,8 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
         break;
       }
     }
-    if (!produto && (initMsg.includes('http') || /(apartamento|casa|cobertura|imovel|imóvel|reserva|lote)/i.test(initMsg))) {
-      produto = initMsg.length > 90 ? initMsg.substring(0, 90) + '...' : initMsg;
+    if (!produto && propInfo.code) {
+      produto = `Imóvel Cód. ${propInfo.code}`;
     }
   }
 
@@ -1189,20 +1208,16 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
     replyText = getFallbackReply(session, companyName);
   }
 
-  // Patch E — Anti-skip mais forte (resposta da IA)
-  const prematureClose =
-    /(encaminh(ar|ando)|conect(ar|ando)|transferi(r|ndo)|NOVO LEAD|corretor.*(entrar[áa]|chamar[áa]|vai entrar)|j[aá] registrei seu (contato|interesse))/i.test(
+  // Guarda de encerramento sem telefone: se o telefone ainda não foi capturado, não permitir que a IA finalize sem pedir telefone
+  const hasValidPhone = isValidPhoneNumber(session.phone);
+  const isFinalTransferWithoutPhone =
+    !hasValidPhone &&
+    /(NOVO LEAD|atendimento (conclu[íi]do|encerrado)|dados foram encaminhados ao consultor|corretor entrar[áa] em contato)/i.test(
       replyText
     );
 
-  const tooEarly =
-    !session.extractedLead.isComplete ||
-    !isValidPhoneNumber(session.phone) ||
-    session.name === 'Cliente' ||
-    isGreetingOnly(session.name);
-
-  if (tooEarly && prematureClose) {
-    console.warn('[WhatsApp AI] Fechamento prematuro bloqueado. Forçando próxima pergunta.');
+  if (isFinalTransferWithoutPhone) {
+    console.warn('[WhatsApp AI] Bloqueando encerramento antes de capturar telefone do lead. Solicitando telefone.');
     replyText = getFallbackReply(session, companyName);
   }
 
