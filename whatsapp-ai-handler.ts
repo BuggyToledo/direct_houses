@@ -168,6 +168,20 @@ function isGreetingOnly(text: string): boolean {
   return greetings.includes(t) || t.length <= 3;
 }
 
+function isExplicitCloseRequest(msg: string): boolean {
+  const t = (msg || '').toLowerCase().trim();
+  // Só mensagem curta e clara — NÃO varre o histórico inteiro
+  if (t === '1') return true;
+  if (/^(aguard(o|ar)(\s+o?\s*contato)?|s[oó] isso|pode chamar(\s+o corretor)?|valeu|obrigad[oa])\.?$/i.test(t)) {
+    return true;
+  }
+  // Pedido explícito de humano (frase completa, não palavra isolada)
+  if (/(falar\s+com\s+(um\s+)?(corretor|atendente|humano)|passa\s+pro?\s+corretor|quero\s+(um\s+)?corretor|transferir\s+para\s+corretor)/i.test(t)) {
+    return true;
+  }
+  return false;
+}
+
 function buildSystemPrompt(session: WhatsAppChatSession, companyName: string = 'Direct Houses') {
   const hasValidPhone = isValidPhoneNumber(session.phone);
   const displayPhone = hasValidPhone ? formatPhoneForDisplay(session.phone) : '';
@@ -309,14 +323,7 @@ function getFallbackReply(
   const hasValidPhone = isValidPhoneNumber(session.phone);
 
   // Check if user requested human broker
-  const isHumanReq =
-    lowerLastMsg.includes('humano') ||
-    lowerLastMsg.includes('pessoa') ||
-    lowerLastMsg.includes('falar com atendente') ||
-    lowerLastMsg.includes('passar para corretor') ||
-    lowerLastMsg.includes('falar com corretor') ||
-    lowerLastMsg.includes('quero um corretor') ||
-    lowerLastMsg === '6';
+  const isHumanReq = isExplicitCloseRequest(lowerLastMsg) || lowerLastMsg === '6';
 
   if (isHumanReq) {
     session.extractedLead.humanRequested = true;
@@ -377,12 +384,12 @@ function getFallbackReply(
     }
   }
 
-  // 2. Need Phone
+  // 2. Need Phone (Patch F)
   if (!hasValidPhone) {
-    const finalNome = session.name !== 'Cliente' ? session.name : '';
     return (
-      (finalNome ? `Muito prazer, *${finalNome}*! ` : '') +
-      `Para podermos te atender e encaminhar as informações, por favor informe o seu *número de WhatsApp com DDD*:`
+      `Olá${session.name !== 'Cliente' ? `, *${session.name}*` : ''}! 😊\n\n` +
+      `Para eu te conectar ao corretor certo, me confirma seu *WhatsApp com DDD*? ` +
+      `(ex: 21 99999-9999)`
     );
   }
 
@@ -400,9 +407,7 @@ function getFallbackReply(
 
   // 3. Confirm Capture & Stage 3 Decision Menu
   if (hasValidPhone && !session.extractedLead.tipoAtendimento) {
-    const lastIsOption1 =
-      lowerLastMsg === '1' ||
-      /\b(aguard(ar|o)|s[oó] isso|pode chamar|contato|corretor|obrigad[oa]|valeu|fechado)\b/i.test(lowerLastMsg);
+    const lastIsOption1 = isExplicitCloseRequest(lowerLastMsg);
     const lastIsOption2 =
       lowerLastMsg === '2' ||
       /\blan[çc]amento(s)?\b|na planta|em constru[çc][ãa]o/i.test(lowerLastMsg);
@@ -675,7 +680,7 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
   }
   if (!session.name || isGreetingOnly(session.name)) session.name = 'Cliente';
 
-  const hasValidPhone = isValidPhoneNumber(session.phone);
+  let hasValidPhone = isValidPhoneNumber(session.phone);
   const displayPhone = hasValidPhone ? formatPhoneForDisplay(session.phone) : 'Não informado';
 
   // 3. Detect origin property from initial message if available
@@ -712,10 +717,7 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
 
   // Se o telefone foi fornecido/confirmado e o tipo ainda não foi definido:
   if (!tipo && hasValidPhone && userMessages.length >= 2) {
-    if (
-      lastUserMsg === '1' ||
-      /\b(aguard(ar|o)|s[oó] isso|pode chamar|contato|corretor|obrigad[oa]|valeu|fechado)\b/i.test(lastUserMsg)
-    ) {
+    if (isExplicitCloseRequest(lastUserMsg)) {
       tipo = 'Aguardando contato do corretor';
       session.extractedLead.humanRequested = true;
       if (!session.extractedLead.trilhaNavegacao.includes('Optou por aguardar contato direto do corretor')) {
@@ -803,25 +805,29 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     }
   }
 
-  // Strict check for explicit human broker request or decision choice 1
-  const isAguardandoCorretor = tipo === 'Aguardando contato do corretor';
-  const humanRequested =
-    isAguardandoCorretor ||
-    /(falar\s*com\s*(um\s*)?(humano|corretor|pessoa|atendente)|passa(r)?\s*p(ra|ro)\s*(um\s*)?(humano|corretor|pessoa)|quero\s*(um\s*)?(humano|atendente)|chama(r)?\s*(um\s*)?corretor|\b6\b)/i.test(
-      userText
-    );
+  // Patch B: isComplete só com telefone real + intenção clara
+  hasValidPhone = isValidPhoneNumber(session.phone);
 
-  // Lead is complete when user chose option 1 (Aguardar corretor), explicit human requested, or qualified across stages
+  const lastMsg = userMessages[userMessages.length - 1]?.content || '';
+  const explicitClose = isExplicitCloseRequest(lastMsg);
+
   const isFullyQualified = Boolean(
-    (hasValidPhone && isAguardandoCorretor) ||
-    (hasValidPhone && humanRequested) ||
-      (userMessages.length >= 4 &&
+    hasValidPhone &&
+    (
+      explicitClose ||
+      (
+        userMessages.length >= 4 &&
         session.name !== 'Cliente' &&
-        hasValidPhone &&
-        tipo &&
-        produto &&
-        produto !== 'A combinar com corretor')
+        !isGreetingOnly(session.name) &&
+        Boolean(tipo) &&
+        Boolean(produto) &&
+        produto !== 'A combinar com corretor' &&
+        produto !== 'Imóvel sob consulta'
+      )
+    )
   );
+
+  const humanRequested = explicitClose || tipo === 'Aguardando contato do corretor';
 
   // Build complete transcript for broker
   const historicoMensagens = session.messages.map((m) => ({
@@ -859,10 +865,12 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     session.status = 'qualified';
   }
 
-  // Persist lead to .data/leads.json ONLY IF phone is valid and name is established!
-  const hasRealPhone = isValidPhoneNumber(session.phone);
-  const hasRealName = session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name);
-  const canRecordLead = hasRealPhone && (isFullyQualified || (hasRealName && (userMessages.length >= 3 || session.extractedLead.tipoAtendimento)));
+  // Patch C: canRecordLead só quando realmente qualificado OU (telefone + nome + tipo)
+  const canRecordLead =
+    hasValidPhone &&
+    session.name !== 'Cliente' &&
+    !isGreetingOnly(session.name) &&
+    (isFullyQualified || (Boolean(tipo) && userMessages.length >= 4));
 
   if (canRecordLead) {
     await recordLead({
@@ -925,6 +933,12 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
     sessions.set(jid, session);
   }
 
+  // Patch F: Atualiza telefone se Baileys mandar um PN válido depois
+  if (isValidPhoneNumber(senderPhone) && !isValidPhoneNumber(session.phone)) {
+    session.phone = cleanPhoneNumber(senderPhone);
+    session.extractedLead.telefone = formatPhoneForDisplay(session.phone);
+  }
+
   // If first message of session wasn't set, set it
   if (!session.initialMessage) {
     session.initialMessage = messageText;
@@ -979,15 +993,18 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
     replyText = getFallbackReply(session, companyName);
   }
 
-  // Anti-skip Safety Check: If AI generated premature closing before lead is fully qualified
-  // userText/userMessages must be scoped here (extractLeadFromSession keeps its own locals)
-  const userMessages = session.messages.filter((m) => m.role === 'user');
-  const userText = userMessages.map((m) => m.content).join(' ');
-  const isAguardandoCorretor = session.extractedLead.tipoAtendimento === 'Aguardando contato do corretor';
-  const isExplicitHuman = isAguardandoCorretor || /(falar\s*com\s*(um\s*)?(humano|corretor|pessoa|atendente)|passa(r)?\s*p(ra|ro)\s*(um\s*)?(humano|corretor|pessoa)|quero\s*(um\s*)?(humano|atendente)|chama(r)?\s*(um\s*)?corretor|\b1\b|\b6\b)/i.test(userText);
+  // Patch E — Anti-skip mais forte (resposta da IA)
+  const prematureClose =
+    /encaminhando|conectando|transferindo|NOVO LEAD|corretor.*entrar[áa] em contato|já registrei seu contato/i.test(replyText);
 
-  if (!session.extractedLead.isComplete && !isExplicitHuman && userMessages.length < 3 && /encaminhando|conectando|transferindo|NOVO LEAD/i.test(replyText)) {
-    console.warn('⚠️ [WhatsApp AI] Resposta tentou finalizar antes da hora. Reorientando para a próxima pergunta de qualificação...');
+  const tooEarly =
+    !session.extractedLead.isComplete ||
+    !isValidPhoneNumber(session.phone) ||
+    session.name === 'Cliente' ||
+    isGreetingOnly(session.name);
+
+  if (tooEarly && prematureClose) {
+    console.warn('[WhatsApp AI] Fechamento prematuro bloqueado. Forçando próxima pergunta.');
     replyText = getFallbackReply(session, companyName);
   }
 
@@ -1085,6 +1102,12 @@ export async function dispatchSessionLeadToRoleta(
   session: WhatsAppChatSession,
   companyName: string = 'Direct Houses'
 ): Promise<{ success: boolean; message: string; broker?: any }> {
+  // Patch C: Nunca despachar sem telefone válido
+  if (!isValidPhoneNumber(session.phone)) {
+    console.warn('[Roleta] Bloqueado: lead sem telefone válido. Continuando qualificação.');
+    return { success: false, message: 'Telefone obrigatório antes do despacho.' };
+  }
+
   const chosenBroker = await getNextBrokerInRoleta();
 
   if (!chosenBroker) {
@@ -1193,6 +1216,11 @@ export async function dispatchSessionLeadToSpecificBroker(
     return { success: false, message: 'Sessão de atendimento não encontrada.' };
   }
 
+  if (!isValidPhoneNumber(session.phone)) {
+    console.warn('[Roleta Manual] Bloqueado: lead sem telefone válido.');
+    return { success: false, message: 'Telefone obrigatório antes do despacho.' };
+  }
+
   const brokers = await getBrokers();
   const chosenBroker = brokers.find((b) => b.id === brokerId);
   if (!chosenBroker) {
@@ -1299,11 +1327,25 @@ async function checkInactiveSessions() {
     if (session.status === 'active' && session.messages.length > 0) {
       const lastActivityTime = new Date(session.lastActivity).getTime();
       if (now - lastActivityTime >= INACTIVITY_TIMEOUT_MS) {
+        await extractLeadFromSession(session);
+
+        // Patch D — Timeout de inatividade: não despachar frio
+        // Só despacha se tiver telefone + pelo menos nome ou tipo
+        const canDispatch =
+          isValidPhoneNumber(session.phone) &&
+          (
+            (session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name)) ||
+            Boolean(session.extractedLead.tipoAtendimento)
+          );
+
+        if (!canDispatch) {
+          continue;
+        }
+
         console.log(
           `⏱️ [Inatividade] Sessão de ${session.name} (${session.phone}) inativa há mais de 5 min. Despachando na Roleta para não perder o lead...`
         );
 
-        await extractLeadFromSession(session);
         const chosenBroker = await getNextBrokerInRoleta();
 
         if (chosenBroker) {
