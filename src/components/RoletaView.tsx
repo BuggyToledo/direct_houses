@@ -36,7 +36,7 @@ import {
   AlertCircle,
   Clock,
 } from 'lucide-react';
-import { Broker, RoletaDistributionLog, RoletaStats } from '../types';
+import { Broker, RoletaDistributionLog, RoletaStats, RoletaConfig } from '../types';
 
 interface RoletaViewProps {
   companyName: string;
@@ -49,10 +49,14 @@ export function RoletaView({ companyName }: RoletaViewProps) {
   // Roleta Rules States
   const [isPaused, setIsPaused] = useState(false);
   const [timeoutSeconds, setTimeoutSeconds] = useState(120);
+  const [dispatchDelaySeconds, setDispatchDelaySeconds] = useState(3);
+  const [autoDispatchEnabled, setAutoDispatchEnabled] = useState(true);
+  const [notifyClientWithBrokerName, setNotifyClientWithBrokerName] = useState(true);
   const [transbordoInteligente, setTransbordoInteligente] = useState(true);
   const [filtroRegiao, setFiltroRegiao] = useState(true);
   const [mascaramentoDlp, setMascaramentoDlp] = useState(true);
   const [acceptedSimulation, setAcceptedSimulation] = useState(false);
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
 
   // Search & Filters for Corretores
   const [searchTerm, setSearchTerm] = useState('');
@@ -73,6 +77,49 @@ export function RoletaView({ companyName }: RoletaViewProps) {
   // Test Dispatch
   const [isDispatchingTest, setIsDispatchingTest] = useState(false);
   const [testResultNotice, setTestResultNotice] = useState<string | null>(null);
+
+  // Fetch Roleta configuration
+  const fetchRoletaConfig = useCallback(async () => {
+    try {
+      const res = await fetch('/api/roleta/config');
+      if (res.ok) {
+        const data: RoletaConfig = await res.json();
+        if (typeof data.timeoutSeconds === 'number') setTimeoutSeconds(data.timeoutSeconds);
+        if (typeof data.dispatchDelaySeconds === 'number') setDispatchDelaySeconds(data.dispatchDelaySeconds);
+        if (typeof data.autoDispatchEnabled === 'boolean') setAutoDispatchEnabled(data.autoDispatchEnabled);
+        if (typeof data.notifyClientWithBrokerName === 'boolean') {
+          setNotifyClientWithBrokerName(data.notifyClientWithBrokerName);
+        }
+      }
+    } catch (err) {
+      console.warn('Aviso ao carregar config da roleta:', err);
+    }
+  }, []);
+
+  // Save Roleta configuration
+  const handleSaveConfig = async (patch: Partial<RoletaConfig>) => {
+    try {
+      setIsSavingConfig(true);
+      const res = await fetch('/api/roleta/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (res.ok) {
+        const updated: RoletaConfig = await res.json();
+        if (typeof updated.timeoutSeconds === 'number') setTimeoutSeconds(updated.timeoutSeconds);
+        if (typeof updated.dispatchDelaySeconds === 'number') setDispatchDelaySeconds(updated.dispatchDelaySeconds);
+        if (typeof updated.autoDispatchEnabled === 'boolean') setAutoDispatchEnabled(updated.autoDispatchEnabled);
+        if (typeof updated.notifyClientWithBrokerName === 'boolean') {
+          setNotifyClientWithBrokerName(updated.notifyClientWithBrokerName);
+        }
+      }
+    } catch (err) {
+      console.error('Erro ao salvar config da roleta:', err);
+    } finally {
+      setIsSavingConfig(false);
+    }
+  };
 
   // Fetch brokers from API
   const fetchBrokers = useCallback(async () => {
@@ -110,7 +157,8 @@ export function RoletaView({ companyName }: RoletaViewProps) {
   useEffect(() => {
     fetchBrokers();
     fetchHistory();
-  }, [fetchBrokers, fetchHistory]);
+    fetchRoletaConfig();
+  }, [fetchBrokers, fetchHistory, fetchRoletaConfig]);
 
   // Toggle broker active status
   const handleToggleBrokerActive = async (broker: Broker) => {
@@ -725,38 +773,88 @@ export function RoletaView({ companyName }: RoletaViewProps) {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Timer className="w-5 h-5 text-blue-600" />
-                  <h3 className="text-base font-bold text-slate-900">Timeout & Transbordo</h3>
+                  <h3 className="text-base font-bold text-slate-900">Temporizadores & Transbordo</h3>
                 </div>
-                <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                  Ativo
-                </span>
+                {isSavingConfig ? (
+                  <span className="text-[10px] font-bold text-blue-600 animate-pulse">Salvando...</span>
+                ) : (
+                  <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                    Ativo
+                  </span>
+                )}
               </div>
 
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Tempo máximo de tolerância para o corretor aceitar no WhatsApp antes de repassar
-                automaticamente para o próximo plantonista.
-              </p>
-
-              {/* Slider Interativo */}
+              {/* 1. Temporizador de Despacho / Encaminhamento */}
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col gap-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-700">Tempo Limite:</span>
-                  <span className="text-sm font-bold text-blue-600">{timeoutSeconds} segundos</span>
+                  <div className="flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-blue-600" />
+                    <span className="text-xs font-bold text-slate-800">Temporizador de Envio (Delay):</span>
+                  </div>
+                  <span className="text-sm font-bold text-blue-600">{dispatchDelaySeconds}s</span>
                 </div>
+                <p className="text-[11px] text-slate-500 leading-tight">
+                  Tempo que a IA aguarda após responder para enviar a ficha completa do lead ao corretor no WhatsApp.
+                </p>
+                <input
+                  type="range"
+                  min={1}
+                  max={30}
+                  step={1}
+                  value={dispatchDelaySeconds}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setDispatchDelaySeconds(val);
+                    handleSaveConfig({ dispatchDelaySeconds: val });
+                  }}
+                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600 mt-1"
+                />
+                <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+                  <span>1s (Imediato)</span>
+                  <span className="font-semibold text-blue-600">3s (Recomendado)</span>
+                  <span>15s</span>
+                  <span>30s</span>
+                </div>
+              </div>
+
+              {/* 2. Timeout de Tolerância / SLA do Corretor */}
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Timer className="w-4 h-4 text-purple-600" />
+                    <span className="text-xs font-bold text-slate-800">Tolerância / SLA do Corretor:</span>
+                  </div>
+                  <span className="text-sm font-bold text-purple-600">{timeoutSeconds}s</span>
+                </div>
+                <p className="text-[11px] text-slate-500 leading-tight">
+                  Tempo máximo para o corretor responder antes de transbordar automaticamente para o próximo.
+                </p>
                 <input
                   type="range"
                   min={30}
                   max={300}
                   step={15}
                   value={timeoutSeconds}
-                  onChange={(e) => setTimeoutSeconds(Number(e.target.value))}
-                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setTimeoutSeconds(val);
+                    handleSaveConfig({ timeoutSeconds: val, inactivityTimeoutSeconds: val });
+                  }}
+                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-purple-600 mt-1"
                 />
                 <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
-                  <span>30s (Ultra-rápido)</span>
+                  <span>30s (Rápido)</span>
                   <span>120s (Padrão)</span>
                   <span>300s (5 min)</span>
                 </div>
+              </div>
+
+              {/* Dica de Testes com Mesmo Telefone */}
+              <div className="p-3 rounded-lg bg-emerald-50/70 border border-emerald-200/80 text-[11px] text-emerald-900 flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Modo de Testes Ilimitados Ativo:</strong> você pode testar repetidamente usando o mesmo número de WhatsApp. O sistema reativa a sessão automaticamente a cada novo teste após 15s.
+                </span>
               </div>
 
               {/* Checkboxes */}

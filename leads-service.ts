@@ -70,117 +70,7 @@ function ensureDataDir() {
   }
 }
 
-const INITIAL_SAMPLE_LEADS: PersistentLead[] = [
-  {
-    id: 'lead-sample-1',
-    nome: 'Guilherme Sampaio',
-    telefone: '5521994321100',
-    email: 'guilherme.sampaio@email.com',
-    tipoAtendimento: 'Lançamento na Planta',
-    produtoImovel: 'Reserva Jardim Barra - 3 Quartos',
-    valorInteresse: 'R$ 850.000 a R$ 1.200.000',
-    bairrosInteresse: ['Barra da Tijuca', 'Recreio dos Bandeirantes'],
-    temperatura: 'quente',
-    observacoes: 'Deseja agendar visita no decorado este sábado pela manhã. Pagamento com entrada facilitada.',
-    initialMessage: 'Olá! Vi o anúncio do Reserva Jardim na Barra e queria detalhes das unidades de 3 quartos.',
-    origem: 'WhatsApp Web Direct Houses',
-    status: 'visita_agendada',
-    tags: ['Lançamento', 'Entrada Facilitada', 'Decora Sábado'],
-    createdAt: new Date(Date.now() - 35 * 60 * 1000).toISOString(),
-    assignedBroker: {
-      id: 'broker-1',
-      name: 'Plantão Direct Houses',
-      phone: '5521987654321',
-      assignedAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
-    },
-    historicoDistribuicoes: [
-      {
-        id: 'dist-init-1',
-        brokerId: 'broker-1',
-        brokerName: 'Plantão Direct Houses',
-        brokerPhone: '5521987654321',
-        data: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
-        tipo: 'automatica_roleta',
-        statusEnvioWhatsApp: 'enviado',
-      },
-    ],
-    trilhaNavegacao: ['Interesse: Lançamentos na Planta', 'Empreendimento: Reserva Jardim Barra', 'Consultou Fotos', 'Consultou Valores'],
-    notasInternas: [
-      {
-        id: 'note-1',
-        texto: 'Cliente com alto potencial de fechamento na planta. Corretor já enviou apresentação em PDF.',
-        autor: 'IA Assistente Direct Houses',
-        data: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
-      },
-    ],
-  },
-  {
-    id: 'lead-sample-2',
-    nome: 'Mariana Drummond',
-    telefone: '5521981112233',
-    email: 'mariana.drummond@gestao.com',
-    tipoAtendimento: 'Comprar Imóvel Pronto',
-    produtoImovel: 'Origem Ipanema Studios',
-    valorInteresse: 'R$ 1.400.000',
-    bairrosInteresse: ['Ipanema', 'Leblon'],
-    temperatura: 'quente',
-    observacoes: 'Investidora procurando studio para aluguel por temporada (Airbnb). Tem recursos para pagamento à vista.',
-    initialMessage: 'Boa tarde, procuro estúdio em Ipanema ou Leblon com alta rentabilidade de locação.',
-    origem: 'WhatsApp Web Direct Houses',
-    status: 'em_atendimento',
-    tags: ['Investidor', 'Airbnb', 'À Vista'],
-    createdAt: new Date(Date.now() - 95 * 60 * 1000).toISOString(),
-    assignedBroker: {
-      id: 'broker-1',
-      name: 'Plantão Direct Houses',
-      phone: '5521987654321',
-      assignedAt: new Date(Date.now() - 75 * 60 * 1000).toISOString(),
-    },
-    historicoDistribuicoes: [
-      {
-        id: 'dist-init-2',
-        brokerId: 'broker-1',
-        brokerName: 'Plantão Direct Houses',
-        brokerPhone: '5521987654321',
-        data: new Date(Date.now() - 75 * 60 * 1000).toISOString(),
-        tipo: 'timeout_recuperacao',
-        statusEnvioWhatsApp: 'enviado',
-      },
-    ],
-    trilhaNavegacao: ['Interesse: Studios & Investimento', 'Empreendimento: Origem Ipanema'],
-  },
-  {
-    id: 'lead-sample-3',
-    nome: 'Dr. Roberto Magalhães',
-    telefone: '5521972345678',
-    tipoAtendimento: 'Lançamento na Planta',
-    produtoImovel: 'Vogue Square Cobertura',
-    valorInteresse: 'R$ 2.800.000',
-    bairrosInteresse: ['Barra da Tijuca'],
-    temperatura: 'morno',
-    observacoes: 'Quer permuta com imóvel em Niterói ou parcelamento direto em 48x.',
-    initialMessage: 'Gostaria de saber se aceitam permuta na compra da cobertura do Vogue Square.',
-    origem: 'WhatsApp Web Direct Houses',
-    status: 'proposta',
-    tags: ['Cobertura', 'Permuta', 'Médio Prazo'],
-    createdAt: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    id: 'lead-sample-4',
-    nome: 'Beatriz Vasconcelos',
-    telefone: '5521969887766',
-    tipoAtendimento: 'Comprar Imóvel Pronto',
-    produtoImovel: 'Apartamento 2 Quartos Botafogo',
-    valorInteresse: 'R$ 680.000',
-    bairrosInteresse: ['Botafogo', 'Flamengo'],
-    temperatura: 'frio',
-    observacoes: 'Aguardando aprovação de crédito na Caixa Econômica Federal.',
-    origem: 'Site Institucional',
-    status: 'novo',
-    tags: ['Financiamento CEF', '1º Imóvel'],
-    createdAt: new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(),
-  },
-];
+const INITIAL_SAMPLE_LEADS: PersistentLead[] = [];
 
 function parseJsonField<T>(val: any, fallback: T): T {
   if (val == null) return fallback;
@@ -227,7 +117,7 @@ function getLeadsFromJson(): PersistentLead[] {
     if (fs.existsSync(LEADS_FILE)) {
       const data = fs.readFileSync(LEADS_FILE, 'utf-8');
       const leads: PersistentLead[] = JSON.parse(data);
-      if (Array.isArray(leads) && leads.length > 0) {
+      if (Array.isArray(leads)) {
         return leads;
       }
     }
@@ -235,8 +125,8 @@ function getLeadsFromJson(): PersistentLead[] {
     console.error('Erro ao ler leads gravados (JSON):', err);
   }
 
-  saveAllPersistentLeads(INITIAL_SAMPLE_LEADS);
-  return INITIAL_SAMPLE_LEADS;
+  saveAllPersistentLeads([]);
+  return [];
 }
 
 export function saveAllPersistentLeads(leads: PersistentLead[]): void {

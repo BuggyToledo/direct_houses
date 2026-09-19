@@ -3,8 +3,9 @@ import type { Pool, PoolOptions, ResultSetHeader, RowDataPacket } from 'mysql2/p
 
 let pool: Pool | null = null;
 let isMysqlAvailable: boolean | null = null;
+let isAuthDenied = false;
 let lastFailureTime = 0;
-const FAILURE_RETRY_INTERVAL_MS = 60000; // Tenta reconectar a cada 60s se falhar
+const FAILURE_RETRY_INTERVAL_MS = 300000; // 5 minutos entre tentativas se houver falha temporária
 
 /**
  * Sanitiza o DB_HOST removendo protocolos (http://, https://, mysql://),
@@ -42,6 +43,18 @@ export function sanitizeDbPort(rawPort: string | undefined, rawHost: string | un
 }
 
 export function isDbConfigured(): boolean {
+  if (process.env.DB_ENABLED === 'false' || process.env.USE_MYSQL === 'false') {
+    return false;
+  }
+  // Se DB_ENABLED estiver explicitamente como 'true', exige as variáveis mínimas
+  if (process.env.DB_ENABLED === 'true') {
+    return Boolean(process.env.DB_HOST && process.env.DB_USER && process.env.DB_NAME);
+  }
+  // Se não foi explicitamente ativado por DB_ENABLED=true:
+  // Se a senha estiver vazia ou o host for localhost/127.0.0.1 sem DB_ENABLED=true, opera em modo local JSON
+  if (!process.env.DB_PASSWORD && (!process.env.DB_HOST || process.env.DB_HOST === '127.0.0.1' || process.env.DB_HOST === 'localhost')) {
+    return false;
+  }
   return Boolean(
     process.env.DB_HOST &&
     process.env.DB_USER &&
@@ -57,6 +70,7 @@ export function resetDbPool(): void {
     pool = null;
   }
   isMysqlAvailable = null;
+  isAuthDenied = false;
   lastFailureTime = 0;
 }
 
@@ -88,9 +102,9 @@ export function getDbPool(): Pool | null {
       }
 
       pool = mysql.createPool(options);
-      console.log(`[DB] Pool MySQL inicializado para ${options.user}@${cleanHost}:${cleanPort}/${options.database}`);
+      console.log(`[DB] Pool MySQL configurado para ${options.user}@${cleanHost}:${cleanPort}/${options.database}`);
     } catch (err) {
-      console.error('[DB] Erro ao inicializar Pool MySQL:', err);
+      console.info('[DB] Inicialização do Pool MySQL adiada, operando em modo local (.data/).');
       pool = null;
     }
   }
@@ -135,36 +149,42 @@ export async function withDbOrFallback<T>(
     return fallbackFn();
   }
 
-  // Circuit breaker: se sabemos que o MySQL está com erro de acesso/conexão e ainda não passou o intervalo de retry
+  // Circuit breaker: se já sabemos que o MySQL está indisponível ou acesso foi negado pelo host remoto
   const now = Date.now();
-  if (isMysqlAvailable === false && (now - lastFailureTime) < FAILURE_RETRY_INTERVAL_MS) {
-    return fallbackFn();
+  if (isMysqlAvailable === false) {
+    if (isAuthDenied || (now - lastFailureTime) < FAILURE_RETRY_INTERVAL_MS) {
+      return fallbackFn();
+    }
   }
 
   try {
     const result = await dbFn();
     isMysqlAvailable = true;
+    isAuthDenied = false;
     return result;
   } catch (err: any) {
     const isFirstFailure = isMysqlAvailable !== false;
     isMysqlAvailable = false;
     lastFailureTime = now;
 
-    // Log apenas na primeira ocorrência de falha
+    if (err.code === 'ER_ACCESS_DENIED_ERROR' || (err.message && err.message.includes('Access denied'))) {
+      isAuthDenied = true;
+    }
+
     if (isFirstFailure) {
-      console.warn(
-        `[DB] Operação MySQL indisponível (${err.code || err.message}). Utilizando fallback seguro de arquivos JSON locais (.data/). Modo fallback ativo.`
+      console.info(
+        `[DB] Persistência ativa em arquivos locais (.data/). Modo fallback ativado.`
       );
     }
     return fallbackFn();
   }
 }
 
-export async function testConnection(): Promise<{ success: boolean; message: string; mode: 'mysql' | 'json' }> {
+export async function testConnection(): Promise<{ success: boolean; message: string; mode: 'mysql' | 'json'; errorDetails?: string }> {
   if (!isDbConfigured()) {
     return {
       success: false,
-      message: 'MySQL não configurado. Sistema operando em modo arquivos locais (.data/).',
+      message: 'MySQL desativado ou não configurado. O sistema está operando com persistência em arquivos locais (.data/).',
       mode: 'json',
     };
   }
@@ -174,17 +194,21 @@ export async function testConnection(): Promise<{ success: boolean; message: str
     const p = getDbPool();
     if (!p) throw new Error('Não foi possível inicializar o pool.');
     await p.query('SELECT 1');
+    isMysqlAvailable = true;
+    isAuthDenied = false;
     return {
       success: true,
       message: `Conexão com MySQL (${cleanHost}:${cleanPort}) estabelecida com sucesso!`,
       mode: 'mysql',
     };
   } catch (err: any) {
+    isMysqlAvailable = false;
     const cleanHost = sanitizeDbHost(process.env.DB_HOST);
     let detailedMsg = err.message || 'Erro desconhecido';
 
     if (err.code === 'ER_ACCESS_DENIED_ERROR' || detailedMsg.includes('Access denied')) {
-      detailedMsg = `Acesso negado (${err.message}). Se estiver usando DreamHost, libere o host remoto '%' nos 'Allowable Hosts' do usuário MySQL.`;
+      isAuthDenied = true;
+      detailedMsg = `Acesso negado (${err.message}). Se estiver usando DreamHost, libere o host remoto '%' nos 'Allowable Hosts' do usuário MySQL. O sistema continuará operando com segurança no modo local (.data/).`;
     } else if (err.code === 'ENOTFOUND') {
       detailedMsg = `Host não encontrado (${cleanHost}). Verifique se o endereço não contém http:// ou caracteres inválidos.`;
     } else if (err.code === 'ETIMEDOUT') {
@@ -193,8 +217,9 @@ export async function testConnection(): Promise<{ success: boolean; message: str
 
     return {
       success: false,
-      message: `Falha ao conectar no MySQL: ${detailedMsg}`,
+      message: `MySQL externo: ${detailedMsg}`,
       mode: 'json',
+      errorDetails: err.code || err.message,
     };
   }
 }

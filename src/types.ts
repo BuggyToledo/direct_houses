@@ -107,6 +107,10 @@ export interface RoletaConfig {
   autoDispatchEnabled: boolean;
   notifyClientWithBrokerName: boolean;
   lastAssignedIndex: number;
+  timeoutSeconds?: number;
+  dispatchDelaySeconds?: number;
+  inactivityTimeoutSeconds?: number;
+  cooldownBetweenDispatchesSeconds?: number;
 }
 
 export type WhatsAppState = 'disconnected' | 'connecting' | 'qr_ready' | 'connected';

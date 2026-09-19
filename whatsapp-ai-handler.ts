@@ -74,12 +74,17 @@ export interface WhatsAppChatSession {
     phone: string;
     assignedAt: string;
   };
-  status: 'active' | 'qualified' | 'dispatched' | 'closed';
+  status: 'active' | 'validating' | 'qualified' | 'dispatched' | 'closed';
   lastActivity: string;
+  lastDispatchedAt?: string;
+  technicalValidationPassed?: boolean;
+  technicalValidationErrors?: string[];
 }
 
 // Sessions store (memory + disk under .data)
 const sessions = new Map<string, WhatsAppChatSession>();
+// Active timers for delayed dispatch (temporizador antes do envio ao corretor)
+const activeDispatchTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const DATA_DIR = path.join(process.cwd(), '.data');
 const SESSIONS_FILE = path.join(DATA_DIR, 'whatsapp-sessions.json');
 let sessionsSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1023,6 +1028,7 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
 
   const lastMsg = userMessages[userMessages.length - 1]?.content || '';
   const explicitClose = isExplicitCloseRequest(lastMsg);
+  const info = session.extractedLead.informacoesColetadas || {};
 
   const currentIntent = session.extractedLead.intencaoAtual || detectedIntent;
   const currentEstado = session.extractedLead.estadoAtendimento;
@@ -1116,34 +1122,112 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     finalStructuredText: `NOVO LEAD DIRECT HOUSES\nNome: ${session.name}\nTelefone: ${displayPhone}\nCódigo do Imóvel: ${session.extractedLead.codigoImovel || 'Não informado'}\nLink do Imóvel: ${session.extractedLead.linkImovel || 'Não informado'}\nIntenção Atual: ${session.extractedLead.intencaoAtual || tipo || 'Aguardando corretor'}\nInformações Coletadas: ${infoSummary || 'Nenhuma'}\nTipo de Atendimento: ${tipo || 'Aguardando corretor'}\nProduto/Imóvel: ${produto || 'A combinar com corretor'}\nTrilha de Navegação: ${resumoNavegacao}\nObservações: ${obs || 'Nenhuma'}\nConsentimento para contato: Sim, autorizado conforme LGPD\nOrigem: WhatsApp Web Direct Houses\nStatus: Aguardando contato do corretor`,
   };
 
-  if (isFullyQualified && session.status === 'active') {
-    session.status = 'qualified';
+  // Se o lead atingiu critérios de qualificação completa, aciona a bateria de validação técnica com estado 'validating'
+  if (isFullyQualified && session.status !== 'dispatched') {
+    await performTechnicalLeadValidation(session);
+  }
+}
+
+/**
+ * Executa as verificações técnicas de qualificação e transita para o estado 'validating' antes de gravar o lead no sistema (recordLead).
+ * Garante que o lead esteja tecnicamente consistente e persistido antes de qualquer encaminhamento para a Roleta.
+ */
+export async function performTechnicalLeadValidation(
+  session: WhatsAppChatSession
+): Promise<{ passed: boolean; errors: string[] }> {
+  const errors: string[] = [];
+
+  // Se o lead já foi formalmente despachado e validado anteriormente, mantém o estado
+  if (session.status === 'dispatched' && session.technicalValidationPassed) {
+    return { passed: true, errors: [] };
   }
 
-  // Gravar lead no banco/JSON sempre que tiver telefone válido
-  const canRecordLead = hasValidPhone && (hasRealName || isFullyQualified || userMessages.length >= 1);
+  // 1. Entra imediatamente no estado de validação técnica
+  const previousStatus = session.status;
+  session.status = 'validating';
 
-  if (canRecordLead) {
+  // 2. Verificação Técnica 1: Validação rigorosa de telefone (E.164 com DDD)
+  const hasValidPhone = isValidPhoneNumber(session.phone);
+  if (!hasValidPhone) {
+    errors.push('Telefone inválido ou não informado com DDD.');
+  }
+
+  // 3. Verificação Técnica 2: Nome e dados mínimos de interesse comercial
+  const hasRealName = Boolean(session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name));
+  const hasCommercialData = Boolean(
+    session.extractedLead.produtoImovel ||
+    session.extractedLead.tipoAtendimento ||
+    session.extractedLead.codigoImovel ||
+    session.extractedLead.intencaoAtual ||
+    session.extractedLead.selectedLancamentoNome ||
+    (session.extractedLead.informacoesColetadas && Object.keys(session.extractedLead.informacoesColetadas).length > 0)
+  );
+
+  const isCompleteOrTransferRequested = Boolean(
+    session.extractedLead.isComplete ||
+    session.extractedLead.humanRequested ||
+    session.extractedLead.intencaoAtual === 'aguardar_corretor' ||
+    session.extractedLead.intencaoAtual === 'atendimento_humano'
+  );
+
+  if (!hasCommercialData && !isCompleteOrTransferRequested && !hasRealName) {
+    errors.push('Lead sem informações comerciais mínimas para atendimento pelo corretor.');
+  }
+
+  // Se alguma verificação de qualificação falhar, aborta a validação técnica
+  if (errors.length > 0) {
+    console.warn(`⚠️ [WhatsApp AI] Validação técnica do lead falhou para ${session.phone}:`, errors);
+    session.status = previousStatus === 'validating' ? 'active' : previousStatus;
+    session.technicalValidationPassed = false;
+    session.technicalValidationErrors = errors;
+    session.extractedLead.isComplete = false;
+    return { passed: false, errors };
+  }
+
+  // 4. Verificação Técnica 3: Persistência técnica formal no sistema (recordLead)
+  try {
+    const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
+    const displayPhone = formatPhoneForDisplay(session.phone);
+
     await recordLead({
-      id: `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`,
-      nome: session.extractedLead.nome,
-      telefone: session.extractedLead.telefone,
-      tipoAtendimento: session.extractedLead.tipoAtendimento || 'Interesse Inicial',
-      produtoImovel: session.extractedLead.produtoImovel || 'A combinar',
+      id: leadId,
+      nome: session.extractedLead.nome || (hasRealName ? session.name : 'Cliente WhatsApp'),
+      telefone: session.extractedLead.telefone || displayPhone,
+      tipoAtendimento: session.extractedLead.tipoAtendimento || 'Interesse Imobiliário',
+      produtoImovel: session.extractedLead.produtoImovel || 'A combinar com corretor',
       observacoes: session.extractedLead.observacoes,
       initialMessage: session.initialMessage,
       origem: 'WhatsApp Web Direct Houses',
-      status: isFullyQualified
-        ? session.assignedBroker
-          ? 'Direcionado na Roleta'
-          : 'Qualificado'
-        : 'Em Atendimento',
+      status: session.assignedBroker ? 'Direcionado na Roleta' : 'Qualificado',
       assignedBroker: session.assignedBroker,
       rawStructuredText: session.extractedLead.finalStructuredText,
       trilhaNavegacao: session.extractedLead.trilhaNavegacao,
-      resumoNavegacao,
-      historicoMensagens,
+      resumoNavegacao: session.extractedLead.resumoNavegacao,
+      historicoMensagens: session.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp,
+      })),
     });
+
+    // 5. Sucesso completo: Registro técnico concluído no sistema. Promove para 'qualified'
+    session.status = 'qualified';
+    session.technicalValidationPassed = true;
+    session.technicalValidationErrors = [];
+    session.extractedLead.isComplete = true;
+    session.extractedLead.estadoAtendimento = 'qualificado';
+    scheduleSessionsPersist();
+
+    console.log(
+      `✅ [WhatsApp AI] Estado de validação concluído com sucesso. Lead técnico persistido no sistema: ID ${leadId} (${session.phone})`
+    );
+    return { passed: true, errors: [] };
+  } catch (err: any) {
+    console.error(`❌ [WhatsApp AI] Erro durante o registro técnico do lead (${session.phone}):`, err);
+    session.status = 'active';
+    session.technicalValidationPassed = false;
+    session.technicalValidationErrors = [err.message || 'Falha ao gravar lead no banco/JSON local.'];
+    return { passed: false, errors: session.technicalValidationErrors };
   }
 }
 
@@ -1182,6 +1266,24 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
       lastActivity: new Date().toISOString(),
     };
     sessions.set(jid, session);
+  } else {
+    // 🔄 Suporte a testes com o mesmo telefone:
+    // Se a sessão já foi despachada em um teste anterior, permitimos que nova mensagem
+    // reative a sessão para permitir novo teste e novo encaminhamento!
+    const roletaConfig = await getRoletaConfig();
+    const cooldownSec = roletaConfig.cooldownBetweenDispatchesSeconds ?? 15;
+    const cooldownMs = cooldownSec * 1000;
+    const now = Date.now();
+    const lastDispTime = session.lastDispatchedAt ? new Date(session.lastDispatchedAt).getTime() : 0;
+
+    if (session.status === 'dispatched' && (now - lastDispTime >= cooldownMs || isGreetingOnly(messageText))) {
+      console.log(`🔄 [WhatsApp AI] Reabrindo sessão de ${session.phone || jid} para novo ciclo/teste (status resetado para 'active').`);
+      session.status = 'active';
+      session.extractedLead.isComplete = false;
+      session.extractedLead.humanRequested = false;
+      session.extractedLead.status = 'Em atendimento';
+      session.extractedLead.initialMessage = messageText;
+    }
   }
 
   // Patch F: Atualiza telefone se Baileys mandar um PN válido depois
@@ -1273,6 +1375,31 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
     replyText = governanceAudit.sanitizedText;
   }
 
+  // 🤖 Interceptador de Validação Técnica Pré-Resposta:
+  // Evitar que o bot diga "ok, vou encaminhar" sem antes completar as verificações de qualificação e o registro técnico no sistema
+  const aiMentionsTransfer = /(vou\s+(te\s+)?encaminhar|encaminhei|encaminhando|estou\s+encaminhando|transferindo|passando\s+seu\s+contato|consultor\s+entrar[áa]\s+em\s+contato|corretor\s+entrar[áa]\s+em\s+contato|atendimento\s+foi\s+encaminhado|dados\s+foram\s+encaminhados|equipe\s+comercial\s+entrar[áa]\s+em\s+contato|plant[ãa]o\s+vai\s+te\s+atender)/i.test(
+    replyText
+  );
+
+  if (aiMentionsTransfer) {
+    // Dispara a validação técnica no estado 'validating' antes de permitir o envio da resposta com promessa de encaminhamento
+    const validationResult = await performTechnicalLeadValidation(session);
+
+    if (!validationResult.passed) {
+      console.warn(
+        `🛡️ [WhatsApp AI Guard] A IA gerou intenção de encaminhamento verbal, mas a validação técnica/registro do lead não foi concluída:`,
+        validationResult.errors
+      );
+
+      // Substitui por mensagem que conduz o lead a completar os dados faltantes
+      if (!isValidPhoneNumber(session.phone)) {
+        replyText = `Com certeza, ${session.name !== 'Cliente' ? session.name : ''}! Para que eu conclua a validação do seu cadastro no sistema e encaminhe seu atendimento com prioridade ao nosso corretor de plantão, por favor me informe o seu *número de WhatsApp com DDD*. 😊`;
+      } else {
+        replyText = `Com certeza, ${session.name !== 'Cliente' ? session.name : ''}! Para que eu finalize seu registro no sistema e passe sua ficha completa ao consultor responsável, por favor me informe qual tipo de imóvel ou região você procura.`;
+      }
+    }
+  }
+
   // Record assistant response
   session.messages.push({
     id: `msg-${Date.now()}-assistant`,
@@ -1339,8 +1466,40 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
 
   // Check if lead was qualified/finished and if Auto Roleta is enabled
   const roletaConfig = await getRoletaConfig();
-  if (session.extractedLead.isComplete && session.status !== 'dispatched' && roletaConfig.autoDispatchEnabled) {
-    await dispatchSessionLeadToRoleta(session, companyName);
+  const shouldDispatch =
+    roletaConfig.autoDispatchEnabled &&
+    session.technicalValidationPassed &&
+    session.status === 'qualified' &&
+    isValidPhoneNumber(session.phone);
+
+  if (shouldDispatch) {
+    const delaySeconds = roletaConfig.dispatchDelaySeconds ?? 3;
+    const delayMs = Math.max(500, delaySeconds * 1000);
+
+    console.log(
+      `⏱️ [Roleta] Temporizador ativo: agendando encaminhamento de ${session.phone} para corretor na Roleta em ${delaySeconds}s...`
+    );
+
+    // Cancelar timer anterior se houver (debounce se o usuário digitar rapidamente outra mensagem)
+    if (activeDispatchTimers.has(session.jid)) {
+      clearTimeout(activeDispatchTimers.get(session.jid)!);
+      activeDispatchTimers.delete(session.jid);
+    }
+
+    const timer = setTimeout(async () => {
+      activeDispatchTimers.delete(session.jid);
+      try {
+        console.log(
+          `🚀 [Roleta] Temporizador (${delaySeconds}s) concluído! Executando despacho do lead de ${session.phone} para a Roleta...`
+        );
+        const dispRes = await dispatchSessionLeadToRoleta(session, companyName);
+        console.log(`✅ [Roleta] Despacho automático finalizado:`, dispRes.message);
+      } catch (dispErr) {
+        console.error('❌ [Roleta] Erro ao despachar lead após temporizador:', dispErr);
+      }
+    }, delayMs);
+
+    activeDispatchTimers.set(session.jid, timer);
   }
 }
 
@@ -1351,10 +1510,29 @@ export async function dispatchSessionLeadToRoleta(
   session: WhatsAppChatSession,
   companyName: string = 'Direct Houses'
 ): Promise<{ success: boolean; message: string; broker?: any }> {
-  // Patch C: Nunca despachar sem telefone válido
+  // Limpar qualquer timer pendente para evitar execuções duplicadas
+  if (activeDispatchTimers.has(session.jid)) {
+    clearTimeout(activeDispatchTimers.get(session.jid)!);
+    activeDispatchTimers.delete(session.jid);
+  }
+
+  // 1. Verificação Rigorosa: Assegurar que as verificações de qualificação e o registro técnico no sistema foram concluídos
+  if (!session.technicalValidationPassed || session.status !== 'qualified') {
+    console.log(`[Roleta Dispatch] Executando validação técnica de qualificação pré-despacho para ${session.phone}...`);
+    const valResult = await performTechnicalLeadValidation(session);
+    if (!valResult.passed) {
+      console.warn(`🚫 [Roleta Dispatch] Despacho bloqueado: Lead não concluiu as verificações de qualificação:`, valResult.errors);
+      return {
+        success: false,
+        message: `Encaminhamento bloqueado: ${valResult.errors.join('; ')}`,
+      };
+    }
+  }
+
+  // 2. Verificação de telefone válido
   if (!isValidPhoneNumber(session.phone)) {
-    console.warn('[Roleta] Bloqueado: lead sem telefone válido. Continuando qualificação.');
-    return { success: false, message: 'Telefone obrigatório antes do despacho.' };
+    console.warn('[Roleta Dispatch] Bloqueado: lead sem telefone válido.');
+    return { success: false, message: 'Telefone obrigatório e validado antes do despacho.' };
   }
 
   const chosenBroker = await getNextBrokerInRoleta();
@@ -1366,11 +1544,12 @@ export async function dispatchSessionLeadToRoleta(
     };
   }
 
-  // 1. Build and send dossier to broker's WhatsApp
+  // 3. Build and send dossier to broker's WhatsApp
   const brokerMessage = formatBrokerLeadMessage(session.extractedLead, companyName, session.phone);
   const sendRes = await whatsAppService.sendTextMessage(chosenBroker.phone, brokerMessage);
 
   session.status = 'dispatched';
+  session.lastDispatchedAt = new Date().toISOString();
   session.assignedBroker = {
     id: chosenBroker.id,
     name: chosenBroker.name,
@@ -1378,7 +1557,7 @@ export async function dispatchSessionLeadToRoleta(
     assignedAt: new Date().toISOString(),
   };
 
-  // 2. Optionally notify customer on WhatsApp with the broker's name
+  // 4. Optionally notify customer on WhatsApp with the broker's name
   const roletaConfig = await getRoletaConfig();
   if (sendRes.success && roletaConfig.notifyClientWithBrokerName) {
     const clientNotice = formatClientAssignedMessage(chosenBroker.name, companyName);
@@ -1406,11 +1585,11 @@ export async function dispatchSessionLeadToRoleta(
     brokerTelefone: chosenBroker.phone,
     tipoDistribuicao: 'automatica_roleta',
     statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
-    motivo: 'Qualificação completa via IA no WhatsApp',
+    motivo: 'Qualificação técnica completa via IA no WhatsApp',
     produtoImovel: session.extractedLead.produtoImovel || 'A combinar',
   });
 
-  // Update persistent lead
+  // Update persistent lead com status Direcionado na Roleta e corretor vinculado
   await recordLead({
     id: leadId,
     nome: session.extractedLead.nome,
@@ -1420,10 +1599,17 @@ export async function dispatchSessionLeadToRoleta(
     observacoes: session.extractedLead.observacoes,
     initialMessage: session.initialMessage,
     origem: 'WhatsApp Web Direct Houses',
-    status: 'em_atendimento',
+    status: 'Direcionado na Roleta',
     temperatura: 'quente',
     assignedBroker: session.assignedBroker,
     rawStructuredText: session.extractedLead.finalStructuredText,
+    trilhaNavegacao: session.extractedLead.trilhaNavegacao,
+    resumoNavegacao: session.extractedLead.resumoNavegacao,
+    historicoMensagens: session.messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      timestamp: m.timestamp,
+    })),
     historicoDistribuicoes: [
       {
         id: `dist-${Date.now()}`,
@@ -1436,6 +1622,8 @@ export async function dispatchSessionLeadToRoleta(
       },
     ],
   });
+
+  scheduleSessionsPersist();
 
   if (!sendRes.success) {
     console.warn(`⚠️ [Roleta] Aviso: Lead registrado para ${chosenBroker.name}, mas envio via WhatsApp falhou: ${sendRes.error}`);
@@ -1556,10 +1744,8 @@ export function getWhatsAppSession(jid: string): WhatsAppChatSession | undefined
 }
 
 /**
- * Inactivity Monitor: Automatically dispatches active sessions that stopped responding for 5 minutes
+ * Inactivity Monitor: Automatically dispatches active sessions that stopped responding
  */
-const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-
 async function checkInactiveSessions() {
   const now = Date.now();
   const companyName = process.env.COMPANY_NAME || 'Direct Houses';
@@ -1567,10 +1753,13 @@ async function checkInactiveSessions() {
 
   if (!roletaConfig.autoDispatchEnabled) return;
 
+  const timeoutSec = roletaConfig.inactivityTimeoutSeconds || roletaConfig.timeoutSeconds || 120;
+  const inactivityTimeoutMs = timeoutSec * 1000;
+
   for (const session of sessions.values()) {
     if (session.status === 'active' && session.messages.length > 0) {
       const lastActivityTime = new Date(session.lastActivity).getTime();
-      if (now - lastActivityTime >= INACTIVITY_TIMEOUT_MS) {
+      if (now - lastActivityTime >= inactivityTimeoutMs) {
         await extractLeadFromSession(session);
 
         // Patch D — Timeout de inatividade: não despachar frio
@@ -1587,7 +1776,7 @@ async function checkInactiveSessions() {
         }
 
         console.log(
-          `⏱️ [Inatividade] Sessão de ${session.name} (${session.phone}) inativa há mais de 5 min. Despachando na Roleta para não perder o lead...`
+          `⏱️ [Inatividade] Sessão de ${session.name} (${session.phone}) inativa há mais de ${timeoutSec}s. Despachando na Roleta para não perder o lead...`
         );
 
         const chosenBroker = await getNextBrokerInRoleta();

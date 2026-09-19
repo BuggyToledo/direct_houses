@@ -17,6 +17,10 @@ export interface RoletaConfig {
   autoDispatchEnabled: boolean; // Auto dispatch when lead is qualified by AI
   notifyClientWithBrokerName: boolean; // Send confirmation to client with broker name
   lastAssignedIndex: number;
+  timeoutSeconds?: number; // SLA tolerância de resposta do corretor (default: 120s)
+  dispatchDelaySeconds?: number; // Temporizador delay antes de acionar corretor (default: 3s)
+  inactivityTimeoutSeconds?: number; // Temporizador recuperação de inatividade (default: 120s)
+  cooldownBetweenDispatchesSeconds?: number; // Cooldown mínimo para redespacho de teste mesmo telefone (default: 15s)
 }
 
 export interface BrokerLeadDispatchResult {
@@ -55,6 +59,10 @@ const DEFAULT_CONFIG: RoletaConfig = {
   autoDispatchEnabled: true,
   notifyClientWithBrokerName: true,
   lastAssignedIndex: -1,
+  timeoutSeconds: 120,
+  dispatchDelaySeconds: 3,
+  inactivityTimeoutSeconds: 120,
+  cooldownBetweenDispatchesSeconds: 15,
 };
 
 function rowToBroker(r: any): Broker {
@@ -174,12 +182,17 @@ export async function getRoletaConfig(): Promise<RoletaConfig> {
   return withDbOrFallback(
     async () => {
       const rows = await query(`SELECT * FROM roleta_config WHERE company_id = 1 LIMIT 1`);
-      if (!rows[0]) return DEFAULT_CONFIG;
+      const jsonCfg = getConfigFromJson();
+      if (!rows[0]) return jsonCfg;
       const r = rows[0];
       return {
         autoDispatchEnabled: Boolean(r.auto_dispatch_enabled),
         notifyClientWithBrokerName: Boolean(r.notify_client_with_broker_name),
         lastAssignedIndex: Number(r.last_assigned_index ?? -1),
+        timeoutSeconds: jsonCfg.timeoutSeconds ?? 120,
+        dispatchDelaySeconds: jsonCfg.dispatchDelaySeconds ?? 3,
+        inactivityTimeoutSeconds: jsonCfg.inactivityTimeoutSeconds ?? 120,
+        cooldownBetweenDispatchesSeconds: jsonCfg.cooldownBetweenDispatchesSeconds ?? 15,
       };
     },
     () => getConfigFromJson()

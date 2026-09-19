@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Check,
   Award,
+  Clock,
 } from 'lucide-react';
 import { Broker, RoletaConfig } from '../types';
 
@@ -293,6 +294,40 @@ export function BrokersManagementModal({
                   <ToggleLeft className="w-8 h-8 text-slate-400" />
                 )}
               </button>
+            </div>
+
+            {/* Temporizador de Despacho (Delay) */}
+            <div className="py-2 border-t border-slate-200/60 pt-3 space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-indigo-600" />
+                  Temporizador de Encaminhamento (Delay de Despacho):
+                </span>
+                <span className="font-bold text-indigo-600">
+                  {config.dispatchDelaySeconds ?? 3}s
+                </span>
+              </div>
+              <div className="text-xs text-slate-500">
+                Pausa estratégica após a resposta da IA para garantir a entrega suave do dossiê no WhatsApp do corretor e evitar conflito de mensagens.
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={30}
+                step={1}
+                value={config.dispatchDelaySeconds ?? 3}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  handleSaveConfig({ dispatchDelaySeconds: val });
+                }}
+                className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 mt-1"
+              />
+              <div className="flex items-center justify-between text-[10px] text-slate-400">
+                <span>1s</span>
+                <span className="font-medium text-indigo-600">3s (Padrão)</span>
+                <span>15s</span>
+                <span>30s</span>
+              </div>
             </div>
           </div>
 
