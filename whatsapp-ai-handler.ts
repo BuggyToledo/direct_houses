@@ -77,6 +77,7 @@ export interface WhatsAppChatSession {
   status: 'active' | 'validating' | 'qualified' | 'dispatched' | 'closed';
   lastActivity: string;
   lastDispatchedAt?: string;
+  lastDispatchedMessageIndex?: number;
   technicalValidationPassed?: boolean;
   technicalValidationErrors?: string[];
 }
@@ -143,6 +144,73 @@ function scheduleSessionsPersist() {
 }
 
 loadSessionsFromDisk();
+
+/**
+ * Limpa todas as sessões ativas do WhatsApp e remove o arquivo de persistência do disco.
+ */
+export function clearAllWhatsAppSessions(): boolean {
+  for (const timer of activeDispatchTimers.values()) {
+    clearTimeout(timer);
+  }
+  activeDispatchTimers.clear();
+  sessions.clear();
+  try {
+    if (fs.existsSync(SESSIONS_FILE)) {
+      fs.unlinkSync(SESSIONS_FILE);
+    }
+    console.log('🧹 [WhatsApp AI] Todas as sessões em memória e disco foram limpas.');
+  } catch (err) {
+    console.warn('⚠️ [WhatsApp AI] Erro ao remover SESSIONS_FILE:', err);
+  }
+  return true;
+}
+
+/**
+ * Extrai apenas o histórico alterado / incremental de mensagens da sessão,
+ * evitando mensagens gigantes no WhatsApp do corretor e no banco de dados.
+ */
+export function getAlteredSessionHistory(
+  session: WhatsAppChatSession
+): Array<{ role: string; content: string; timestamp: string }> {
+  const allMessages = session.messages || [];
+  if (allMessages.length === 0) return [];
+
+  let relevantMessages: typeof allMessages = [];
+
+  // Se a sessão já foi despachada anteriormente, pega estritamente as mensagens adicionadas/alteradas após o último despacho
+  if (
+    typeof session.lastDispatchedMessageIndex === 'number' &&
+    session.lastDispatchedMessageIndex >= 0 &&
+    session.lastDispatchedMessageIndex < allMessages.length - 1
+  ) {
+    relevantMessages = allMessages.slice(session.lastDispatchedMessageIndex + 1);
+  } else if (session.lastDispatchedAt) {
+    // Fallback por timestamp se lastDispatchedMessageIndex não estiver gravado
+    const lastDispTime = new Date(session.lastDispatchedAt).getTime();
+    relevantMessages = allMessages.filter(
+      (m) => new Date(m.timestamp).getTime() > lastDispTime
+    );
+  }
+
+  // Se for o primeiro despacho ou se não houve mensagens adicionais após o último despacho,
+  // seleciona apenas as últimas mensagens mais recentes e relevantes (máx 4-5 mensagens alteradas)
+  if (relevantMessages.length === 0) {
+    relevantMessages = allMessages.slice(-5);
+  }
+
+  // Sanitiza e compacta respostas longas da IA para manter a mensagem do corretor limpa e concisa
+  return relevantMessages.map((m) => {
+    let cleanContent = (m.content || '').trim();
+    if (m.role === 'assistant' && cleanContent.length > 140) {
+      cleanContent = cleanContent.substring(0, 137).trim() + '...';
+    }
+    return {
+      role: m.role,
+      content: cleanContent,
+      timestamp: m.timestamp,
+    };
+  });
+}
 
 // Initialize Google GenAI client
 function getGeminiClient(): GoogleGenAI | null {
@@ -1079,12 +1147,8 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
 
   const humanRequested = isBrokerOrHumanIntent || Boolean(session.extractedLead.humanRequested);
 
-  // Build complete transcript for broker
-  const historicoMensagens = session.messages.map((m) => ({
-    role: m.role,
-    content: m.content,
-    timestamp: m.timestamp,
-  }));
+  // Build altered / compact history for broker (only altered/recent messages, avoiding huge payloads)
+  const historicoMensagens = getAlteredSessionHistory(session);
 
   const resumoNavegacao = session.extractedLead.trilhaNavegacao.length > 0
     ? session.extractedLead.trilhaNavegacao.join(' ➔ ')
@@ -1203,11 +1267,7 @@ export async function performTechnicalLeadValidation(
       rawStructuredText: session.extractedLead.finalStructuredText,
       trilhaNavegacao: session.extractedLead.trilhaNavegacao,
       resumoNavegacao: session.extractedLead.resumoNavegacao,
-      historicoMensagens: session.messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-        timestamp: m.timestamp,
-      })),
+      historicoMensagens: session.extractedLead.historicoMensagens || getAlteredSessionHistory(session),
     });
 
     // 5. Sucesso completo: Registro técnico concluído no sistema. Promove para 'qualified'
@@ -1544,18 +1604,31 @@ export async function dispatchSessionLeadToRoleta(
     };
   }
 
-  // 3. Build and send dossier to broker's WhatsApp
-  const brokerMessage = formatBrokerLeadMessage(session.extractedLead, companyName, session.phone);
-  const sendRes = await whatsAppService.sendTextMessage(chosenBroker.phone, brokerMessage);
+  // 3. Build and send dossier to broker's WhatsApp com histórico alterado
+  const alteredHistory = getAlteredSessionHistory(session);
+  const isIncremental = Boolean(
+    session.lastDispatchedAt ||
+    (typeof session.lastDispatchedMessageIndex === 'number' && session.lastDispatchedMessageIndex >= 0)
+  );
 
   session.status = 'dispatched';
   session.lastDispatchedAt = new Date().toISOString();
+  session.lastDispatchedMessageIndex = session.messages.length - 1;
   session.assignedBroker = {
     id: chosenBroker.id,
     name: chosenBroker.name,
     phone: chosenBroker.phone,
     assignedAt: new Date().toISOString(),
   };
+
+  const leadDataForBroker = {
+    ...session.extractedLead,
+    historicoMensagens: alteredHistory,
+    isIncrementalUpdate: isIncremental,
+  };
+
+  const brokerMessage = formatBrokerLeadMessage(leadDataForBroker, companyName, session.phone);
+  const sendRes = await whatsAppService.sendTextMessage(chosenBroker.phone, brokerMessage);
 
   // 4. Optionally notify customer on WhatsApp with the broker's name
   const roletaConfig = await getRoletaConfig();
@@ -1605,11 +1678,7 @@ export async function dispatchSessionLeadToRoleta(
     rawStructuredText: session.extractedLead.finalStructuredText,
     trilhaNavegacao: session.extractedLead.trilhaNavegacao,
     resumoNavegacao: session.extractedLead.resumoNavegacao,
-    historicoMensagens: session.messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-      timestamp: m.timestamp,
-    })),
+    historicoMensagens: alteredHistory,
     historicoDistribuicoes: [
       {
         id: `dist-${Date.now()}`,
@@ -1662,19 +1731,33 @@ export async function dispatchSessionLeadToSpecificBroker(
     return { success: false, message: 'Corretor não encontrado.' };
   }
 
-  const brokerMessage = formatBrokerLeadMessage(session.extractedLead, companyName, session.phone);
-  const sendRes = await whatsAppService.sendTextMessage(chosenBroker.phone, brokerMessage);
+  const alteredHistory = getAlteredSessionHistory(session);
+  const isIncremental = Boolean(
+    session.lastDispatchedAt ||
+    (typeof session.lastDispatchedMessageIndex === 'number' && session.lastDispatchedMessageIndex >= 0)
+  );
 
   chosenBroker.leadsReceived = (chosenBroker.leadsReceived || 0) + 1;
   chosenBroker.lastAssignedAt = new Date().toISOString();
 
   session.status = 'dispatched';
+  session.lastDispatchedAt = new Date().toISOString();
+  session.lastDispatchedMessageIndex = session.messages.length - 1;
   session.assignedBroker = {
     id: chosenBroker.id,
     name: chosenBroker.name,
     phone: chosenBroker.phone,
     assignedAt: new Date().toISOString(),
   };
+
+  const leadDataForBroker = {
+    ...session.extractedLead,
+    historicoMensagens: alteredHistory,
+    isIncrementalUpdate: isIncremental,
+  };
+
+  const brokerMessage = formatBrokerLeadMessage(leadDataForBroker, companyName, session.phone);
+  const sendRes = await whatsAppService.sendTextMessage(chosenBroker.phone, brokerMessage);
 
   if (sendRes.success) {
     const clientNotice = formatClientAssignedMessage(chosenBroker.name, companyName);
@@ -1711,6 +1794,7 @@ export async function dispatchSessionLeadToSpecificBroker(
     temperatura: 'quente',
     assignedBroker: session.assignedBroker,
     rawStructuredText: session.extractedLead.finalStructuredText,
+    historicoMensagens: alteredHistory,
     historicoDistribuicoes: [
       {
         id: `dist-${Date.now()}`,

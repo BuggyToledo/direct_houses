@@ -11,6 +11,7 @@ import {
   getWhatsAppSession,
   dispatchSessionLeadToRoleta,
   dispatchSessionLeadToSpecificBroker,
+  clearAllWhatsAppSessions,
 } from './whatsapp-ai-handler';
 import {
   getBrokers,
@@ -43,6 +44,7 @@ import {
   addLeadDistribution,
   deletePersistentLead,
   clearAllPersistentLeads,
+  clearAllLeadHistories,
   getLeadsMetrics,
 } from './leads-service';
 import {
@@ -1267,6 +1269,36 @@ app.delete('/api/leads', async (req, res) => {
     res.json({ success });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Clear lead message histories specifically (keeps leads, clears chat transcripts)
+app.delete('/api/leads/history', async (req, res) => {
+  try {
+    const success = await clearAllLeadHistories();
+    res.json({ success, message: 'Histórico de mensagens dos leads limpo com sucesso.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clear all database histories (lead transcripts, roleta distribution logs, and active WhatsApp chat sessions)
+app.post('/api/admin/clear-history', async (req, res) => {
+  try {
+    const leadsHistoryCleared = await clearAllLeadHistories();
+    const roletaHistoryCleared = await clearRoletaDistributionHistory();
+    const sessionsCleared = clearAllWhatsAppSessions();
+    res.json({
+      success: true,
+      message: 'Todos os históricos (leads, roleta e sessões de WhatsApp) foram limpos com sucesso!',
+      details: {
+        leadsHistoryCleared,
+        roletaHistoryCleared,
+        sessionsCleared,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

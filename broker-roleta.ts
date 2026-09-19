@@ -399,7 +399,8 @@ export function formatBrokerLeadMessage(
     initialMessage?: string;
     trilhaNavegacao?: string[];
     resumoNavegacao?: string;
-    historicoMensagens?: Array<{ role: string; content: string; timestamp: string }>;
+    historicoMensagens?: Array<{ role: string; content: string; timestamp?: string }>;
+    isIncrementalUpdate?: boolean;
   },
   companyName: string = 'Direct Houses',
   clientPhone?: string
@@ -417,14 +418,26 @@ export function formatBrokerLeadMessage(
     trilhaText = `🧭 *RESUMO DA NAVEGAÇÃO:*\n${lead.resumoNavegacao}\n\n`;
   }
 
-  // Formatar histórico de mensagens trocadas se existir
+  // Formatar histórico selecionado (apenas interações alteradas/recentes, evitando mensagens gigantes)
   let chatHistoryText = '';
   if (lead.historicoMensagens && lead.historicoMensagens.length > 0) {
-    chatHistoryText = `💬 *TRANSCRIÇÃO COMPLETA DA CONVERSA:*\n` +
-      lead.historicoMensagens
-        .map((m) => `${m.role === 'user' ? '👤 Cliente' : '🤖 IA'}: ${m.content}`)
-        .join('\n\n') +
-      `\n\n`;
+    const isIncremental = Boolean(lead.isIncrementalUpdate);
+    const headerTitle = isIncremental
+      ? `💬 *HISTÓRICO ALTERADO (NOVAS INTERAÇÕES DO CLIENTE):*`
+      : `💬 *HISTÓRICO RECENTE / ALTERAÇÕES DO CLIENTE:*`;
+
+    // Filtra e compacta para manter a mensagem do corretor elegante e no tamanho ideal
+    const compactMessages = lead.historicoMensagens.slice(-5).map((m) => {
+      const roleIcon = m.role === 'user' ? '👤 Cliente' : '🤖 IA';
+      let cleanText = (m.content || '').trim();
+      // Respostas da IA longas são resumidas/truncadas para não poluir o celular do corretor
+      if (m.role === 'assistant' && cleanText.length > 140) {
+        cleanText = cleanText.substring(0, 137).trim() + '...';
+      }
+      return `${roleIcon}: ${cleanText}`;
+    });
+
+    chatHistoryText = `${headerTitle}\n` + compactMessages.join('\n\n') + `\n\n`;
   }
 
   if (lead.isTimeoutRecovery) {

@@ -460,6 +460,29 @@ export async function clearAllPersistentLeads(): Promise<boolean> {
   return true;
 }
 
+export async function clearAllLeadHistories(): Promise<boolean> {
+  await withDbOrFallback(
+    async () => {
+      await execute(`UPDATE leads SET historico_mensagens = '[]', raw_structured_text = '' WHERE company_id = 1`);
+    },
+    () => {
+      const leads = getLeadsFromJson();
+      for (const l of leads) {
+        l.historicoMensagens = [];
+        l.rawStructuredText = '';
+      }
+      saveAllPersistentLeads(leads);
+    }
+  );
+  const leads = getLeadsFromJson();
+  for (const l of leads) {
+    l.historicoMensagens = [];
+    l.rawStructuredText = '';
+  }
+  saveAllPersistentLeads(leads);
+  return true;
+}
+
 export async function getLeadsMetrics() {
   const leads = await getPersistentLeads();
   const porEtapa: Record<string, number> = {
