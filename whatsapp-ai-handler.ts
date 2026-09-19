@@ -238,18 +238,17 @@ function buildSystemPrompt(session: WhatsAppChatSession, companyName: string = '
       : '';
 
     currentStepDirective = `👉 ETAPA ATUAL: ETAPA 3 (CONFIRMAÇÃO DE CAPTURA + MENU DECISÓRIO)
-- O cliente já forneceu/confirmou o telefone (${displayPhone}). O LEAD ESTÁ CAPTURADO COM SUCESSO!
-- Ação: Confirme o registro com simpatia e apresente o MENU DECISÓRIO DE PROSSEGUIMENTO:
-  "Perfeito, ${session.name}! Já registrei seu contato com sucesso${originImovelNotice}. Nosso consultor especialista entrará em contato com você em instantes! 👍
+- O cliente já forneceu/confirmou o telefone (${displayPhone}).
+- Ação: Apresente o MENU DECISÓRIO com simpatia e objetividade:
+  "Perfeito, ${session.name}! Já registrei suas preferências${originImovelNotice}.
+  Como prefere prosseguir?
+  1️⃣ *Aguardar contato do corretor* (Já é o suficiente, aguardo a mensagem)
+  2️⃣ *Conhecer nossos Lançamentos na Planta* (Fotos, plantas e valores no chat)
+  3️⃣ *Buscar Imóveis Prontos* (Comprar ou alugar)
+  4️⃣ *Tirar uma dúvida rápida agora*"
 
-Enquanto preparamos o seu atendimento, como prefere prosseguir?
-1️⃣ *Aguardar contato do corretor* (Já é o suficiente, aguardo a mensagem)
-2️⃣ *Conhecer nossos Lançamentos na Planta* (Fotos, plantas e valores no chat)
-3️⃣ *Buscar Imóveis Prontos* (Comprar ou alugar)
-4️⃣ *Tirar uma dúvida rápida agora*"
-
-⛔ REGRA DE FECHAMENTO IMEDIATO:
-- Se o cliente responder "1", "aguardo", "só isso", "pode chamar", "corretor", "obrigado", "valeu": Finalize o atendimento cordialmente informando que o corretor já está com o contato dele. NUNCA faça novas perguntas nem reinicie menus!`;
+⛔ REGRA DE FECHAMENTO:
+- Apenas finalize o atendimento se o cliente escolher expressamente a opção 1 (ex: "1", "aguardo contato", "só isso"). NUNCA finalize apenas por palavras isoladas como "corretor" ou "obrigado"!`;
   } else if (isLancamentoFlow && !session.extractedLead.selectedLancamentoNome) {
     currentStepDirective = `👉 ETAPA ATUAL: ETAPA 4A (ESCOLHA DO LANÇAMENTO)
 - O cliente quer ver Lançamentos na Planta.
@@ -320,17 +319,6 @@ function getFallbackReply(
   const lastUserMsg = userMsgs[userMsgs.length - 1]?.content.trim() || '';
   const lowerLastMsg = lastUserMsg.toLowerCase();
   const activeLanc = getActiveLancamentos();
-  const hasValidPhone = isValidPhoneNumber(session.phone);
-
-  // Check if user requested human broker
-  const isHumanReq = isExplicitCloseRequest(lowerLastMsg) || lowerLastMsg === '6';
-
-  if (isHumanReq) {
-    session.extractedLead.humanRequested = true;
-    const finalNome = session.name !== 'Cliente' ? session.name : 'Cliente';
-    return `Perfeito, *${finalNome}*! Estou transferindo seu atendimento agora mesmo para um de nossos corretores especialistas da ${companyName}. Em instantes ele te chamará aqui no WhatsApp com todo o material! 👍`;
-  }
-
   // Extract phone number from all user messages
   for (const m of userMsgs) {
     const detectedPhone = extractPhoneFromText(m.content);
@@ -342,17 +330,45 @@ function getFallbackReply(
   }
 
   // Extract name if available
-  if (session.name === 'Cliente' || !session.name) {
+  if (session.name === 'Cliente' || !session.name || isGreetingOnly(session.name)) {
     for (const m of userMsgs) {
-      if (!isGreetingOnly(m.content) && !extractPhoneFromText(m.content)) {
-        session.name = m.content.trim().split('\n')[0].replace(/[!.,]/g, '');
-        session.extractedLead.nome = session.name;
+      const clean = m.content.trim().split('\n')[0].replace(/[!.,]/g, '').trim();
+      if (
+        !isGreetingOnly(clean) &&
+        !extractPhoneFromText(clean) &&
+        !isExplicitCloseRequest(clean) &&
+        !/^[1-6]$/.test(clean) &&
+        clean.length >= 2 &&
+        clean.length <= 40
+      ) {
+        session.name = clean;
+        session.extractedLead.nome = clean;
         break;
       }
     }
   }
 
+  const hasValidPhone = isValidPhoneNumber(session.phone);
   const displayPhone = hasValidPhone ? formatPhoneForDisplay(session.phone) : '';
+
+  // 1. If no valid phone, ALWAYS ask for phone first (Etapa 1B / Patch F)
+  if (!hasValidPhone) {
+    return (
+      `Olá${session.name !== 'Cliente' ? `, *${session.name}*` : ''}! 😊\n\n` +
+      `Para eu te conectar ao corretor certo, me confirma seu *WhatsApp com DDD*? ` +
+      `(ex: 21 99999-9999)`
+    );
+  }
+
+  // 2. Check if user requested human broker (only allowed when phone is valid)
+  const isHumanReq = isExplicitCloseRequest(lowerLastMsg) || lowerLastMsg === '6';
+  if (isHumanReq) {
+    session.extractedLead.humanRequested = true;
+    session.extractedLead.tipoAtendimento = 'Aguardando contato do corretor';
+    session.extractedLead.isComplete = true;
+    const finalNome = session.name !== 'Cliente' ? session.name : '';
+    return `Perfeito${finalNome ? `, *${finalNome}*` : ''}! Estou transferindo seu atendimento agora mesmo para um de nossos corretores especialistas da ${companyName}. Em instantes ele te chamará aqui no WhatsApp com todo o material! 👍`;
+  }
 
   // 1. Initial Greeting
   if (userMsgs.length === 1) {
@@ -672,8 +688,16 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
   // 2. Extract name from first non-greeting message
   if (session.name === 'Cliente' || !session.name || isGreetingOnly(session.name)) {
     for (const msg of userMessages) {
-      if (!isGreetingOnly(msg.content) && !extractPhoneFromText(msg.content)) {
-        session.name = msg.content.trim().split('\n')[0].replace(/[!.,]/g, '');
+      const clean = msg.content.trim().split('\n')[0].replace(/[!.,]/g, '').trim();
+      if (
+        !isGreetingOnly(clean) &&
+        !extractPhoneFromText(clean) &&
+        !isExplicitCloseRequest(clean) &&
+        !/^[1-6]$/.test(clean) &&
+        clean.length >= 2 &&
+        clean.length <= 40
+      ) {
+        session.name = clean;
         break;
       }
     }
@@ -995,7 +1019,9 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
 
   // Patch E — Anti-skip mais forte (resposta da IA)
   const prematureClose =
-    /encaminhando|conectando|transferindo|NOVO LEAD|corretor.*entrar[áa] em contato|já registrei seu contato/i.test(replyText);
+    /(encaminh(ar|ando)|conect(ar|ando)|transferi(r|ndo)|NOVO LEAD|corretor.*(entrar[áa]|chamar[áa]|vai entrar)|j[aá] registrei seu (contato|interesse))/i.test(
+      replyText
+    );
 
   const tooEarly =
     !session.extractedLead.isComplete ||
