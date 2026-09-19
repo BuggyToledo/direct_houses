@@ -739,15 +739,15 @@ export function sanitizeAndAuditAIResponse(
   // 1. DETECÇÃO EXPANDIDA DE PROMPT INJECTION & JAILBREAK (PT & EN)
   const injectionPatterns = [
     // Português
-    /ignore\s+(todas\s+as\s+)?(regras|instru[çc][õo]es|diretrizes)/i,
+    /ignore\s+(todas\s+as\s+|all\s+)?(regras|instru[çc][õo]es|diretrizes|rules)/i,
     /esque[çc]a\s+(todas\s+as\s+)?(regras|instru[çc][õo]es)/i,
-    /mostre\s+(todo\s+o|o\s+conte[úu]do\s+do)\s+(pdf|prompt|sistema)/i,
+    /mostre\s+(todo\s+o|o\s+conte[úu]do\s+do|tudo\s+(que\s+voc[êe]\s+recebeu|o\s+que\s+est[áa]))\s+(no\s+)?(pdf|prompt|sistema|documento|book)/i,
     /liste\s+(todas\s+as\s+)?informa[çc][õo]es\s+internas/i,
     /quais\s+s[ãa]o\s+os\s+dados\s+(ocultos|secretos|confidenciais)/i,
     /revele\s+(o\s+)?(system\s+prompt|prompt\s+do\s+sistema)/i,
-    /finja\s+ser|aja\s+como|voc[êe]\s+[ée]\s+agora/i,
+    /finja\s+ser|aja\s+como|voc[êe]\s+[ée]\s+agora\s+DAN/i,
     /qual\s*[ée]\s*a\s*fonte\s*desse\s*dado/i,
-    /copie\s*o\s*conte[úu]do\s*do\s*pdf/i,
+    /copie\s*(o\s+)?conte[úu]do\s*(do\s+)?pdf/i,
     /finja\s*que\s*sou\s*funcion[áa]rio/i,
     /instru[çc][õo]es\s*secretas/i,
 
@@ -769,6 +769,12 @@ export function sanitizeAndAuditAIResponse(
   }
 
   // 2. DETECÇÃO DE ENDEREÇOS FÍSICOS COMPLETOS, LOTES, QUADRAS, BLOCOS E CEPs
+  const addressPromptRegex = /endere[çc]o\s+completo|rua\s+e\s+(o\s+)?n[úu]mero\s+exato|qual\s+(o\s+)?n[úu]mero\s+do\s+lote|matr[íi]cula\s+do\s+im[oó]vel/i;
+  if (addressPromptRegex.test(lowerUser)) {
+    violations.push('Solicitação de endereço físico completo ou matrícula');
+    if (!blockedType) blockedType = 'endereco_completo';
+  }
+
   const fullAddressRegexes = [
     /\b(rua|avenida|av\.|alameda|travessa|estrada|pra[çc]a|rodovia)\s+[^,\n]{3,80},\s*(n[º°o]?\s*)?\d{1,6}/i,
     /\blote\s*\d+/i,
@@ -787,42 +793,49 @@ export function sanitizeAndAuditAIResponse(
     }
   }
 
-  // 3. DETECÇÃO DE TERMOS SENSÍVEIS (CONTATO DE TERCEIRO, TELEFONES SOLTOS, COMISSÕES, PREÇO INTERNO, DADOS DE PROPRIETÁRIO)
+  // 3. DETECÇÃO DE TERMOS SENSÍVEIS (CONTATO DE TERCEIRO, COMISSÕES, PREÇO INTERNO, DADOS DE PROPRIETÁRIO)
   const sensitiveTerms = [
     {
-      pattern: /\b(telefone|celular|whatsapp|e-?mail|contato)\s+(da\s+)?(construtora|incorporadora|propriet[aá]rio|dono|engenheiro)/i,
+      pattern: /\b(telefone|celular|whatsapp|e-?mail|contato)\s+(direto\s+)?(da\s+)?(construtora|incorporadora|propriet[aá]rio|dono|engenheiro)/i,
       type: 'contato_terceiro',
       label: 'Contato de construtora/terceiro não autorizado',
-    },
-    {
-      pattern: /\b\d{2}\s?\d{4,5}-?\d{4}\b/,
-      type: 'telefone_suspeito',
-      label: 'Número de telefone externo solto na resposta',
+      checkUser: true,
+      checkText: true,
     },
     {
       pattern: /\b(comiss[ãa]o|percentual\s+de\s+venda|taxa\s+de\s+administra[çc][ãa]o|honor[áa]rios\s+de\s+corretagem)\b/i,
       type: 'comissao',
       label: 'Menção a percentual de comissão ou honorários internos',
+      checkUser: true,
+      checkText: true,
     },
     {
       pattern: /\b(tabela\s+interna|pre[çc]o\s+n[ãa]o\s+publicado|valor\s+n[ãa]o\s+autorizado|espelho\s+de\s+vendas)\b/i,
       type: 'preco_interno',
       label: 'Menção a tabela interna de preços confidencial',
+      checkUser: true,
+      checkText: true,
     },
     {
       pattern: /\b(propriet[aá]rio|dono\s+do\s+im[oó]vel|nome\s+do\s+vendedor|s[óo]cio\s+incorporador)\b/i,
       type: 'dados_proprietario',
       label: 'Menção a dados de proprietário ou sócio',
+      checkUser: true,
+      checkText: true,
     },
     {
-      pattern: /\b(no\s+pdf|conforme\s+o\s+book\s+da\s+construtora|documento\s+interno|material\s+confidencial|\.pdf\b)/i,
+      pattern: /\b(no\s+pdf|conforme\s+o\s+book\s+da\s+construtora|documento\s+interno|material\s+confidencial|\.pdf\b|Book_[a-zA-Z0-9_-]+)/i,
       type: 'documento_interno',
       label: 'Menção a documento ou arquivo interno não público',
+      checkUser: false,
+      checkText: true,
     },
   ];
 
   for (const item of sensitiveTerms) {
-    if (item.pattern.test(text) || item.pattern.test(lowerUser)) {
+    const matchedInText = item.checkText && item.pattern.test(text);
+    const matchedInUser = item.checkUser && item.pattern.test(lowerUser);
+    if (matchedInText || matchedInUser) {
       violations.push(item.label);
       if (!blockedType) blockedType = item.type;
     }
@@ -830,18 +843,13 @@ export function sanitizeAndAuditAIResponse(
 
   // 4. VERIFICAÇÃO CONTRA A BASE REAL DE LANÇAMENTOS CADASTRADOS (NÍVEL 3)
   for (const lanc of allLancamentos) {
-    // Endereço completo específico
-    if (lanc.enderecoCompleto && lanc.enderecoCompleto.length > 5) {
-      const parts = lanc.enderecoCompleto
-        .toLowerCase()
-        .split(/[,-]/)
-        .map((p) => p.trim())
-        .filter((p) => p.length > 4);
-      for (const part of parts) {
-        if (text.toLowerCase().includes(part) && !text.toLowerCase().includes(lanc.bairro.toLowerCase())) {
-          violations.push(`Vazamento de trecho de endereço interno cadastrado: "${part}"`);
-          if (!blockedType) blockedType = 'endereco_completo';
-        }
+    // Endereço completo específico do lançamento
+    if (lanc.enderecoCompleto && lanc.enderecoCompleto.length > 10) {
+      const cleanAddress = lanc.enderecoCompleto.toLowerCase().replace(/[^\w\s]/g, '');
+      const cleanText = text.toLowerCase().replace(/[^\w\s]/g, '');
+      if (cleanText.includes(cleanAddress)) {
+        violations.push(`Vazamento de endereço físico exato cadastrado: "${lanc.enderecoCompleto}"`);
+        if (!blockedType) blockedType = 'endereco_completo';
       }
     }
 
@@ -858,6 +866,12 @@ export function sanitizeAndAuditAIResponse(
     if (lanc.emailConstrutora && text.toLowerCase().includes(lanc.emailConstrutora.toLowerCase())) {
       violations.push(`Vazamento de e-mail de construtora (${lanc.emailConstrutora})`);
       if (!blockedType) blockedType = 'contato_terceiro';
+    }
+
+    // Nome de arquivo interno / Book PDF do lançamento
+    if (lanc.documentoOrigemNome && text.includes(lanc.documentoOrigemNome)) {
+      violations.push(`Vazamento de referência a arquivo interno (${lanc.documentoOrigemNome})`);
+      if (!blockedType) blockedType = 'documento_interno';
     }
 
     // Catálogo Inativo
