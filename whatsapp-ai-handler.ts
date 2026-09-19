@@ -184,11 +184,19 @@ function isGreetingOnly(text: string): boolean {
 
 function isExplicitCloseRequest(msg: string): boolean {
   const t = (msg || '').toLowerCase().trim();
-  if (t === '1') return true;
-  if (/^(aguard(o|ar)(\s+o?\s*contato)?|s[oó] isso|pode chamar(\s+o corretor)?|valeu|obrigad[oa])\.?$/i.test(t)) {
+  if (t === '1' || t === '1️⃣' || t === '5' || t === '6') return true;
+  if (
+    /^(op[çc][ãa]o\s*1|1\s*[-–.]?\s*aguard(ar|o)|1\s*[-–.]?\s*contato|aguard(o|ar)(\s+o?\s*(contato|retorno))?|s[oó] isso|pode chamar(\s+o?\s*(corretor|consultor))?|valeu|obrigad[oa])\.?$/i.test(
+      t
+    )
+  ) {
     return true;
   }
-  if (/(falar\s+com\s+(um\s+)?(corretor|atendente|humano)|passa\s+pro?\s+corretor|quero\s+(um\s+)?corretor|transferir\s+para\s+corretor)/i.test(t)) {
+  if (
+    /(falar\s+com\s+(uma?\s+)?(corretor|consultor|atendente|humano|pessoa)|passa\s+pro?\s+(corretor|consultor|atendente|humano)|quero\s+(um\s+)?(corretor|consultor|humano)|transferir\s+para\s+(corretor|consultor)|atendimento\s+humano|pessoa\s+de\s+verdade|pode\s+me\s+ligar|me\s+chama\s+no\s+zap)/i.test(
+      t
+    )
+  ) {
     return true;
   }
   return false;
@@ -1009,29 +1017,61 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     }
   }
 
-  // Patch B: isComplete só com telefone real + intenção clara
+  // Patch B: isComplete com telefone real + qualquer trilha/intenção concluída
   hasValidPhone = isValidPhoneNumber(session.phone);
+  const hasRealName = Boolean(session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name));
 
   const lastMsg = userMessages[userMessages.length - 1]?.content || '';
   const explicitClose = isExplicitCloseRequest(lastMsg);
 
-  const isFullyQualified = Boolean(
-    hasValidPhone &&
-    (
+  const currentIntent = session.extractedLead.intencaoAtual || detectedIntent;
+  const currentEstado = session.extractedLead.estadoAtendimento;
+
+  const isBrokerOrHumanIntent = Boolean(
+    currentIntent === 'aguardar_corretor' ||
+      currentIntent === 'atendimento_humano' ||
+      currentEstado === 'aguardando_corretor' ||
+      currentEstado === 'atendimento_humano' ||
       explicitClose ||
-      (
-        userMessages.length >= 4 &&
-        session.name !== 'Cliente' &&
-        !isGreetingOnly(session.name) &&
-        Boolean(tipo) &&
-        Boolean(produto) &&
-        produto !== 'A combinar com corretor' &&
-        produto !== 'Imóvel sob consulta'
-      )
-    )
+      (tipo && (tipo.includes('corretor') || tipo.includes('Humano')))
   );
 
-  const humanRequested = explicitClose || tipo === 'Aguardando contato do corretor';
+  const isLancamentosComplete = Boolean(
+    currentEstado === 'lancamentos_concluido' ||
+      (currentIntent === 'lancamentos_na_planta' &&
+        (info.finalidade || info.regiao || session.extractedLead.selectedLancamentoNome))
+  );
+
+  const isProntosComplete = Boolean(
+    currentEstado === 'prontos_concluido' ||
+      (currentIntent === 'imoveis_prontos' && (info.tipoImovel || info.finalidade || info.regiao))
+  );
+
+  const isDuvidaComplete = Boolean(
+    currentEstado === 'respondendo_duvida' && (info.duvidaTexto || userMessages.length >= 2)
+  );
+
+  const isGeneralQualified = Boolean(
+    userMessages.length >= 3 &&
+      hasRealName &&
+      (tipo || session.extractedLead.produtoImovel || session.extractedLead.codigoImovel || session.extractedLead.selectedLancamentoNome)
+  );
+
+  const isFullyQualified = Boolean(
+    hasValidPhone &&
+      (
+        session.extractedLead.isComplete ||
+        session.status === 'qualified' ||
+        session.status === 'dispatched' ||
+        isBrokerOrHumanIntent ||
+        isLancamentosComplete ||
+        isProntosComplete ||
+        isDuvidaComplete ||
+        isGeneralQualified
+      )
+  );
+
+  const humanRequested = isBrokerOrHumanIntent || Boolean(session.extractedLead.humanRequested);
 
   // Build complete transcript for broker
   const historicoMensagens = session.messages.map((m) => ({
@@ -1080,12 +1120,8 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     session.status = 'qualified';
   }
 
-  // Patch C: canRecordLead só quando realmente qualificado OU (telefone + nome + tipo)
-  const canRecordLead =
-    hasValidPhone &&
-    session.name !== 'Cliente' &&
-    !isGreetingOnly(session.name) &&
-    (isFullyQualified || (Boolean(tipo) && userMessages.length >= 4));
+  // Gravar lead no banco/JSON sempre que tiver telefone válido
+  const canRecordLead = hasValidPhone && (hasRealName || isFullyQualified || userMessages.length >= 1);
 
   if (canRecordLead) {
     await recordLead({
@@ -1334,86 +1370,84 @@ export async function dispatchSessionLeadToRoleta(
   const brokerMessage = formatBrokerLeadMessage(session.extractedLead, companyName, session.phone);
   const sendRes = await whatsAppService.sendTextMessage(chosenBroker.phone, brokerMessage);
 
-  if (sendRes.success) {
-    session.status = 'dispatched';
-    session.assignedBroker = {
-      id: chosenBroker.id,
-      name: chosenBroker.name,
-      phone: chosenBroker.phone,
-      assignedAt: new Date().toISOString(),
-    };
+  session.status = 'dispatched';
+  session.assignedBroker = {
+    id: chosenBroker.id,
+    name: chosenBroker.name,
+    phone: chosenBroker.phone,
+    assignedAt: new Date().toISOString(),
+  };
 
-    // 2. Optionally notify customer on WhatsApp with the broker's name
-    const roletaConfig = await getRoletaConfig();
-    if (roletaConfig.notifyClientWithBrokerName) {
-      const clientNotice = formatClientAssignedMessage(chosenBroker.name, companyName);
-      await whatsAppService.sendTextMessage(session.jid, clientNotice);
+  // 2. Optionally notify customer on WhatsApp with the broker's name
+  const roletaConfig = await getRoletaConfig();
+  if (sendRes.success && roletaConfig.notifyClientWithBrokerName) {
+    const clientNotice = formatClientAssignedMessage(chosenBroker.name, companyName);
+    await whatsAppService.sendTextMessage(session.jid, clientNotice);
 
-      session.messages.push({
-        id: `msg-${Date.now()}-broker-assigned`,
-        role: 'assistant',
-        content: clientNotice,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      });
-    }
-
-    console.log(`🎯 [Roleta] Lead de ${session.extractedLead.nome} (${session.phone}) encaminhado para ${chosenBroker.name} (${chosenBroker.phone})`);
-    
-    const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
-
-    // Record in Roleta Distribution History
-    await recordDistributionLog({
-      leadId,
-      leadNome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
-      leadTelefone: session.extractedLead.telefone || session.phone,
-      brokerId: chosenBroker.id,
-      brokerNome: chosenBroker.name,
-      brokerTelefone: chosenBroker.phone,
-      tipoDistribuicao: 'automatica_roleta',
-      statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
-      motivo: 'Qualificação completa via IA no WhatsApp',
-      produtoImovel: session.extractedLead.produtoImovel || 'A combinar',
+    session.messages.push({
+      id: `msg-${Date.now()}-broker-assigned`,
+      role: 'assistant',
+      content: clientNotice,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     });
-
-    // Update persistent lead
-    await recordLead({
-      id: leadId,
-      nome: session.extractedLead.nome,
-      telefone: session.extractedLead.telefone || session.phone,
-      tipoAtendimento: session.extractedLead.tipoAtendimento,
-      produtoImovel: session.extractedLead.produtoImovel,
-      observacoes: session.extractedLead.observacoes,
-      initialMessage: session.initialMessage,
-      origem: 'WhatsApp Web Direct Houses',
-      status: 'em_atendimento',
-      temperatura: 'quente',
-      assignedBroker: session.assignedBroker,
-      rawStructuredText: session.extractedLead.finalStructuredText,
-      historicoDistribuicoes: [
-        {
-          id: `dist-${Date.now()}`,
-          brokerId: chosenBroker.id,
-          brokerName: chosenBroker.name,
-          brokerPhone: chosenBroker.phone,
-          data: new Date().toISOString(),
-          tipo: 'automatica_roleta',
-          statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
-        },
-      ],
-    });
-
-    return {
-      success: true,
-      message: `Lead encaminhado com sucesso para o corretor ${chosenBroker.name}.`,
-      broker: chosenBroker,
-    };
-  } else {
-    return {
-      success: false,
-      message: `Falha ao enviar mensagem para o WhatsApp do corretor ${chosenBroker.name}: ${sendRes.error}`,
-      broker: chosenBroker,
-    };
   }
+
+  console.log(`🎯 [Roleta] Lead de ${session.extractedLead.nome} (${session.phone}) direcionado para ${chosenBroker.name} (${chosenBroker.phone}). Status envio: ${sendRes.success ? 'OK' : 'Falha'}`);
+  
+  const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
+
+  // Record in Roleta Distribution History
+  await recordDistributionLog({
+    leadId,
+    leadNome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
+    leadTelefone: session.extractedLead.telefone || session.phone,
+    brokerId: chosenBroker.id,
+    brokerNome: chosenBroker.name,
+    brokerTelefone: chosenBroker.phone,
+    tipoDistribuicao: 'automatica_roleta',
+    statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
+    motivo: 'Qualificação completa via IA no WhatsApp',
+    produtoImovel: session.extractedLead.produtoImovel || 'A combinar',
+  });
+
+  // Update persistent lead
+  await recordLead({
+    id: leadId,
+    nome: session.extractedLead.nome,
+    telefone: session.extractedLead.telefone || session.phone,
+    tipoAtendimento: session.extractedLead.tipoAtendimento,
+    produtoImovel: session.extractedLead.produtoImovel,
+    observacoes: session.extractedLead.observacoes,
+    initialMessage: session.initialMessage,
+    origem: 'WhatsApp Web Direct Houses',
+    status: 'em_atendimento',
+    temperatura: 'quente',
+    assignedBroker: session.assignedBroker,
+    rawStructuredText: session.extractedLead.finalStructuredText,
+    historicoDistribuicoes: [
+      {
+        id: `dist-${Date.now()}`,
+        brokerId: chosenBroker.id,
+        brokerName: chosenBroker.name,
+        brokerPhone: chosenBroker.phone,
+        data: new Date().toISOString(),
+        tipo: 'automatica_roleta',
+        statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
+      },
+    ],
+  });
+
+  if (!sendRes.success) {
+    console.warn(`⚠️ [Roleta] Aviso: Lead registrado para ${chosenBroker.name}, mas envio via WhatsApp falhou: ${sendRes.error}`);
+  }
+
+  return {
+    success: true,
+    message: sendRes.success
+      ? `Lead encaminhado com sucesso para o corretor ${chosenBroker.name}.`
+      : `Lead distribuído para ${chosenBroker.name} no painel (envio WhatsApp pendente: ${sendRes.error}).`,
+    broker: chosenBroker,
+  };
 }
 
 /**
@@ -1443,75 +1477,72 @@ export async function dispatchSessionLeadToSpecificBroker(
   const brokerMessage = formatBrokerLeadMessage(session.extractedLead, companyName, session.phone);
   const sendRes = await whatsAppService.sendTextMessage(chosenBroker.phone, brokerMessage);
 
+  chosenBroker.leadsReceived = (chosenBroker.leadsReceived || 0) + 1;
+  chosenBroker.lastAssignedAt = new Date().toISOString();
+
+  session.status = 'dispatched';
+  session.assignedBroker = {
+    id: chosenBroker.id,
+    name: chosenBroker.name,
+    phone: chosenBroker.phone,
+    assignedAt: new Date().toISOString(),
+  };
+
   if (sendRes.success) {
-    chosenBroker.leadsReceived = (chosenBroker.leadsReceived || 0) + 1;
-    chosenBroker.lastAssignedAt = new Date().toISOString();
-
-    session.status = 'dispatched';
-    session.assignedBroker = {
-      id: chosenBroker.id,
-      name: chosenBroker.name,
-      phone: chosenBroker.phone,
-      assignedAt: new Date().toISOString(),
-    };
-
     const clientNotice = formatClientAssignedMessage(chosenBroker.name, companyName);
     await whatsAppService.sendTextMessage(session.jid, clientNotice);
-
-    const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
-
-    // Record in Roleta Distribution History
-    await recordDistributionLog({
-      leadId,
-      leadNome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
-      leadTelefone: session.extractedLead.telefone || session.phone,
-      brokerId: chosenBroker.id,
-      brokerNome: chosenBroker.name,
-      brokerTelefone: chosenBroker.phone,
-      tipoDistribuicao: 'manual_operador',
-      statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
-      motivo: 'Direcionamento específico pelo operador',
-      produtoImovel: session.extractedLead.produtoImovel || 'A combinar',
-    });
-
-    // Update persistent lead
-    await recordLead({
-      id: leadId,
-      nome: session.extractedLead.nome,
-      telefone: session.extractedLead.telefone || session.phone,
-      tipoAtendimento: session.extractedLead.tipoAtendimento,
-      produtoImovel: session.extractedLead.produtoImovel,
-      observacoes: session.extractedLead.observacoes,
-      initialMessage: session.initialMessage,
-      origem: 'WhatsApp Web Direct Houses',
-      status: 'em_atendimento',
-      temperatura: 'quente',
-      assignedBroker: session.assignedBroker,
-      rawStructuredText: session.extractedLead.finalStructuredText,
-      historicoDistribuicoes: [
-        {
-          id: `dist-${Date.now()}`,
-          brokerId: chosenBroker.id,
-          brokerName: chosenBroker.name,
-          brokerPhone: chosenBroker.phone,
-          data: new Date().toISOString(),
-          tipo: 'manual_operador',
-          statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
-        },
-      ],
-    });
-
-    return {
-      success: true,
-      message: `Lead encaminhado com sucesso para ${chosenBroker.name}.`,
-      broker: chosenBroker,
-    };
-  } else {
-    return {
-      success: false,
-      message: `Falha ao enviar mensagem para o corretor: ${sendRes.error}`,
-    };
   }
+
+  const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
+
+  // Record in Roleta Distribution History
+  await recordDistributionLog({
+    leadId,
+    leadNome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
+    leadTelefone: session.extractedLead.telefone || session.phone,
+    brokerId: chosenBroker.id,
+    brokerNome: chosenBroker.name,
+    brokerTelefone: chosenBroker.phone,
+    tipoDistribuicao: 'manual_operador',
+    statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
+    motivo: 'Direcionamento específico pelo operador',
+    produtoImovel: session.extractedLead.produtoImovel || 'A combinar',
+  });
+
+  // Update persistent lead
+  await recordLead({
+    id: leadId,
+    nome: session.extractedLead.nome,
+    telefone: session.extractedLead.telefone || session.phone,
+    tipoAtendimento: session.extractedLead.tipoAtendimento,
+    produtoImovel: session.extractedLead.produtoImovel,
+    observacoes: session.extractedLead.observacoes,
+    initialMessage: session.initialMessage,
+    origem: 'WhatsApp Web Direct Houses',
+    status: 'em_atendimento',
+    temperatura: 'quente',
+    assignedBroker: session.assignedBroker,
+    rawStructuredText: session.extractedLead.finalStructuredText,
+    historicoDistribuicoes: [
+      {
+        id: `dist-${Date.now()}`,
+        brokerId: chosenBroker.id,
+        brokerName: chosenBroker.name,
+        brokerPhone: chosenBroker.phone,
+        data: new Date().toISOString(),
+        tipo: 'manual_operador',
+        statusEnvioWhatsApp: sendRes.success ? 'enviado' : 'falha',
+      },
+    ],
+  });
+
+  return {
+    success: true,
+    message: sendRes.success
+      ? `Lead direcionado com sucesso para ${chosenBroker.name}.`
+      : `Lead vinculado a ${chosenBroker.name} no painel (envio WhatsApp: ${sendRes.error}).`,
+    broker: chosenBroker,
+  };
 }
 
 export function getAllWhatsAppSessions(): WhatsAppChatSession[] {
