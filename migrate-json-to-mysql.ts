@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 import mysql from 'mysql2/promise';
+import { sanitizeDbHost, sanitizeDbPort } from './db';
 
 dotenv.config();
 
@@ -10,8 +11,8 @@ const DATA_DIR = path.join(process.cwd(), '.data');
 async function runMigration() {
   console.log('🚀 Iniciando script de migração: JSON (.data/) -> MySQL');
 
-  const host = process.env.DB_HOST || '127.0.0.1';
-  const port = parseInt(process.env.DB_PORT || '3306', 10);
+  const host = sanitizeDbHost(process.env.DB_HOST);
+  const port = sanitizeDbPort(process.env.DB_PORT, process.env.DB_HOST);
   const user = process.env.DB_USER || 'root';
   const password = process.env.DB_PASSWORD || '';
   const database = process.env.DB_NAME || 'direct_houses';

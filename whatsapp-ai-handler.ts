@@ -53,6 +53,20 @@ export interface WhatsAppChatSession {
     trilhaNavegacao: string[];
     resumoNavegacao?: string;
     historicoMensagens?: Array<{ role: string; content: string; timestamp: string }>;
+    codigoImovel?: string;
+    linkImovel?: string;
+    intencaoAtual?: 'aguardar_corretor' | 'lancamentos_na_planta' | 'imoveis_prontos' | 'duvida' | 'atendimento_humano' | string;
+    estadoAtendimento?: string;
+    informacoesColetadas?: {
+      finalidade?: string;
+      regiao?: string;
+      tipoImovel?: string;
+      faixaValor?: string;
+      quantidadeQuartos?: string;
+      formaPagamento?: string;
+      duvidaTexto?: string;
+      [key: string]: any;
+    };
   };
   assignedBroker?: {
     id: string;
@@ -170,142 +184,403 @@ function isGreetingOnly(text: string): boolean {
 
 function isExplicitCloseRequest(msg: string): boolean {
   const t = (msg || '').toLowerCase().trim();
-  // Só mensagem curta e clara — NÃO varre o histórico inteiro
   if (t === '1') return true;
   if (/^(aguard(o|ar)(\s+o?\s*contato)?|s[oó] isso|pode chamar(\s+o corretor)?|valeu|obrigad[oa])\.?$/i.test(t)) {
     return true;
   }
-  // Pedido explícito de humano (frase completa, não palavra isolada)
   if (/(falar\s+com\s+(um\s+)?(corretor|atendente|humano)|passa\s+pro?\s+corretor|quero\s+(um\s+)?corretor|transferir\s+para\s+corretor)/i.test(t)) {
     return true;
   }
   return false;
 }
 
-function buildSystemPrompt(session: WhatsAppChatSession, companyName: string = 'Direct Houses') {
-  const hasValidPhone = isValidPhoneNumber(session.phone);
-  const displayPhone = hasValidPhone ? formatPhoneForDisplay(session.phone) : '';
-  const lancamentosText = formatLancamentosForPrompt();
-  const userMsgs = session.messages.filter((m) => m.role === 'user');
-  const activeLancamentos = getActiveLancamentos();
+export function extractPropertyCodeAndLink(text: string): { code?: string; link?: string } {
+  if (!text) return {};
+  let link: string | undefined;
+  let code: string | undefined;
 
-  const hasName = Boolean(session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name));
-  const isPhoneSettled = Boolean(hasValidPhone && (session.extractedLead.phoneConfirmed || userMsgs.length >= 2));
-  const hasTipo = Boolean(session.extractedLead.tipoAtendimento);
-  const hasProduto = Boolean(
-    session.extractedLead.produtoImovel &&
-      session.extractedLead.produtoImovel !== 'A combinar com corretor' &&
-      session.extractedLead.produtoImovel !== 'Não informado'
-  );
-  const isLancamentoFlow = session.extractedLead.tipoAtendimento?.toLowerCase().includes('lançamento');
-  const selectedLanc = session.extractedLead.selectedLancamentoNome || session.extractedLead.produtoImovel;
-
-  let currentStepDirective = '';
-
-  if (!hasValidPhone && !hasName) {
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 1 (SAUDAÇÃO, NOME & TELEFONE)
-- O número de WhatsApp do cliente NÃO foi detectado automaticamente e ainda não sabemos o nome dele.
-- Ação: Cumprimente com simpatia e solicite o NOME COMPLETO e o NÚMERO DE WHATSAPP COM DDD:
-  "Olá! Seja muito bem-vindo(a) à ${companyName}. 🏡
-  Para começarmos o seu atendimento exclusivo, qual é o seu *nome completo* e o seu *número de WhatsApp com DDD*?"
-- Faça SOMENTE esta pergunta inicial.
-⛔ REGRA OBRIGATÓRIA: NUNCA avance para menus sem que o cliente informe o telefone com DDD!`;
-  } else if (!hasValidPhone && hasName) {
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 1B (SOLICITAÇÃO DO TELEFONE COM DDD)
-- O cliente se chama "${session.name}", mas AINDA NÃO temos o número de WhatsApp dele.
-- Ação: Cumprimente pelo nome e solicite o NÚMERO DE WHATSAPP COM DDD:
-  "Muito prazer em falar com você, ${session.name}! 😊
-  Para que possamos te passar todos os detalhes, fotos e condições com nossos corretores, qual é o seu *número de WhatsApp com DDD*?"
-- Faça SOMENTE esta solicitação.
-⛔ REGRA OBRIGATÓRIA: NUNCA avance para o Menu Decisório nem encerre o atendimento sem obter o número de telefone!`;
-  } else if (hasValidPhone && !hasName) {
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 1C (CONFIRMAÇÃO DO WHATSAPP IDENTIFICADO + NOME)
-- O número de WhatsApp do cliente foi identificado automaticamente como "${displayPhone}".
-- Ação: Cumprimente com simpatia, cite o WhatsApp já identificado e pergunte o *nome completo*:
-  "Olá! Seja muito bem-vindo(a) à ${companyName}. 🏡
-  Identifiquei seu WhatsApp como *${displayPhone}*.
-  Para começarmos, qual é o seu *nome completo*?"
-- Faça SOMENTE esta pergunta.`;
-  } else if (hasValidPhone && !isPhoneSettled && userMsgs.length <= 2 && !hasTipo) {
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 2 (CONFIRMAÇÃO DO NÚMERO IDENTIFICADO)
-- O cliente se chama "${session.name}" e o WhatsApp dele foi detectado automaticamente como "${displayPhone}".
-- Ação: Confirme o número já identificado de forma rápida e cordial:
-  "Muito prazer, ${session.name}! Identifiquei seu WhatsApp como *${displayPhone}*. Este é o seu melhor telefone para contato ou prefere informar outro?"
-- Faça SOMENTE esta confirmação.`;
-  } else if (!hasTipo) {
-    const originImovelNotice = session.extractedLead.produtoImovel && session.extractedLead.produtoImovel !== 'A combinar com corretor' && session.extractedLead.produtoImovel !== 'Não informado'
-      ? ` referente ao seu interesse no imóvel *${session.extractedLead.produtoImovel}*`
-      : '';
-
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 3 (CONFIRMAÇÃO DE CAPTURA + MENU DECISÓRIO)
-- O cliente já forneceu/confirmou o telefone (${displayPhone}).
-- Ação: Apresente o MENU DECISÓRIO com simpatia e objetividade:
-  "Perfeito, ${session.name}! Já registrei suas preferências${originImovelNotice}.
-  Como prefere prosseguir?
-  1️⃣ *Aguardar contato do corretor* (Já é o suficiente, aguardo a mensagem)
-  2️⃣ *Conhecer nossos Lançamentos na Planta* (Fotos, plantas e valores no chat)
-  3️⃣ *Buscar Imóveis Prontos* (Comprar ou alugar)
-  4️⃣ *Tirar uma dúvida rápida agora*"
-
-⛔ REGRA DE FECHAMENTO:
-- Apenas finalize o atendimento se o cliente escolher expressamente a opção 1 (ex: "1", "aguardo contato", "só isso"). NUNCA finalize apenas por palavras isoladas como "corretor" ou "obrigado"!`;
-  } else if (isLancamentoFlow && !session.extractedLead.selectedLancamentoNome) {
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 4A (ESCOLHA DO LANÇAMENTO)
-- O cliente quer ver Lançamentos na Planta.
-- Ação: Apresente a lista numerada dos lançamentos ativos autorizados abaixo e pergunte qual deles ele gostaria de conhecer:
-${activeLancamentos.map((l, i) => `  ${i + 1}️⃣ *${l.nome}* (${l.bairro}) - ${l.tipologias}`).join('\n')}
-⛔ PROIBIDO encerrar o atendimento agora! Pergunte qual empreendimento ele deseja explorar.`;
-  } else if (isLancamentoFlow && session.extractedLead.selectedLancamentoNome) {
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 4B (SUB-MENU INTERATIVO DO LANÇAMENTO "${selectedLanc}")
-- O cliente está explorando o empreendimento: "${selectedLanc}".
-- Você tem à sua disposição as informações autorizadas: Fotos, Descrição do projeto, Localidade/Referências, Vizinhança e Lazer, Valores e Condições.
-- Ação:
-  * Se o cliente fez uma pergunta específica (ex: pediu fotos, perguntou o preço, localização, lazer, etc.): Responda IMEDIATAMENTE com os dados autorizados do catálogo e ofereça para ver outro tópico ou falar com o corretor especialista.
-  * Se o cliente acabou de escolher o empreendimento: Apresente um resumo rápido e o SUB-MENU INTERATIVO:
-    "O *${selectedLanc}* é uma excelente oportunidade! 🏢✨
-    O que você gostaria de conferir agora?
-    1️⃣ 📸 *Fotos e Imagens*
-    2️⃣ 📝 *Descrição e Conceito do Projeto*
-    3️⃣ 📍 *Localização e Pontos de Referência*
-    4️⃣ 🌳 *Vizinhança e Lazer do Condomínio*
-    5️⃣ 💰 *Valores e Condições Comerciais*
-    6️⃣ 💬 *Falar com um Corretor Especialista / Agendar Visita*"
-⛔ PROIBIDO voltar para o menu principal de serviços ou repetir perguntas já respondidas!`;
-  } else if (!hasProduto) {
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 4 (DETALHES DO IMÓVEL BUSCADO)
-- O cliente escolheu: "${session.extractedLead.tipoAtendimento}".
-- Ação: Pergunte qual o tipo de imóvel (apartamento, casa, cobertura), quantos quartos e o bairro de preferência.
-⛔ PROIBIDO encerrar o atendimento agora!`;
-  } else if (!session.extractedLead.observacoes || userMsgs.length < 4) {
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 5 (OBSERVAÇÕES E FAIXA DE VALOR)
-- O cliente tem interesse em: "${session.extractedLead.produtoImovel}".
-- Ação: Pergunte se há alguma preferência importante (como vaga de garagem, varanda, faixa de valor/investimento ou urgência para fechar).`;
-  } else {
-    currentStepDirective = `👉 ETAPA ATUAL: ETAPA 6 (FINALIZAÇÃO E ENCAMINHAMENTO)
-- Todas as informações foram coletadas com sucesso!
-- Ação: Agradeça ao cliente com entusiasmo e simpatia, e informe que o corretor especialista da ${companyName} entrará em contato em instantes para apresentar todas as informações.`;
+  const linkMatch = text.match(/https?:\/\/[^\s]+|(?:www\.)[^\s]+|directhouses\.com\.br\/[^\s]+/i);
+  if (linkMatch) {
+    link = linkMatch[0].replace(/[.,!?;:)]$/, '');
   }
 
-  return `Você é o assistente comercial virtual oficial da imobiliária ${companyName}.
-Você está conversando DIRETAMENTE no WhatsApp com um cliente em tempo real.
-Seu objetivo é qualificar o lead com simpatia, naturalidade e eficiência comercial, coletando as informações necessárias para que nossos corretores plantonistas façam o atendimento perfeito.
+  const codeMatch = text.match(/\b(?:c[oó]d(?:igo)?\.?|ref\.?|im[oó]vel|an[úu]ncio)\s*[:#]?\s*([A-Za-z0-9_-]{2,15})\b/i);
+  if (codeMatch) {
+    code = codeMatch[1].toUpperCase();
+  } else {
+    const directCodeMatch = text.match(/\b(DH-?\d{2,8})\b/i);
+    if (directCodeMatch) {
+      code = directCodeMatch[1].toUpperCase();
+    }
+  }
 
-DIRETRIZES FUNDAMENTAIS:
-1. Responda em Português do Brasil de forma acolhedora, concisa e profissional. Use emojis com elegância.
-2. NUNCA faça mais de uma pergunta por mensagem. Mantenha as mensagens curtas e objetivas para leitura fácil no celular.
-3. Se o cliente solicitar atendimento humano, finalize com educação imediatamente informando o contato do corretor.
-4. Respeite estritamente a ETAPA ATUAL indicada abaixo.
+  return { code, link };
+}
 
-${currentStepDirective}
+export function classifyIntent(text: string): 'aguardar_corretor' | 'lancamentos_na_planta' | 'imoveis_prontos' | 'duvida' | 'atendimento_humano' | null {
+  const t = (text || '').toLowerCase().trim();
 
-BASE DE CONHECIMENTO DE LANÇAMENTOS AUTORIZADA:
-${lancamentosText}
+  // Atendimento humano
+  if (
+    /(falar\s+com\s+(uma?\s+)?(pessoa|humano|atendente|corretor|consultor)|atendente\s+humano|quero\s+(um\s+)?humano|passa\s+pro?\s+(atendente|humano|corretor)|pessoa\s+de\s+verdade)/i.test(t) ||
+    t === '5'
+  ) {
+    return 'atendimento_humano';
+  }
 
-INFORMAÇÕES COLETADAS ATÉ AGORA:
-- Nome: ${session.name}
-- Telefone: ${displayPhone || 'Pendente de coleta'}
-- Tipo de Atendimento: ${session.extractedLead.tipoAtendimento || 'Pendente'}
-- Imóvel de Interesse: ${session.extractedLead.produtoImovel || 'Pendente'}`;
+  // Aguardar corretor
+  if (
+    t === '1' ||
+    /^(1|aguard(o|ar)(\s+o?\s*contato)?|pode\s+pedir\s+para\s+o\s+corretor\s+me\s+chamar|s[oó] isso|pode\s+chamar|valeu|obrigad[oa])\.?$/i.test(t) ||
+    /aguard(ar|o)\s+(o\s+)?(contato|consultor|corretor)/i.test(t)
+  ) {
+    return 'aguardar_corretor';
+  }
+
+  // Lançamentos na planta
+  if (
+    t === '2' ||
+    /\b(lan[çc]amento(s)?|na\s+planta|em\s+constru[çc][ãa]o|apartamento(s)?\s+novo(s)?|novos)\b/i.test(t) ||
+    /conhecer\s+lan[çc]amentos/i.test(t)
+  ) {
+    return 'lancamentos_na_planta';
+  }
+
+  // Imóveis prontos
+  if (
+    t === '3' ||
+    /\b(im[oó]ve(l|is)\s+pronto(s)?|comprar|alugar|procurando\s+(uma?\s+)?casa|apartamento\s+pronto|buscar\s+im[oó]veis)\b/i.test(t)
+  ) {
+    return 'imoveis_prontos';
+  }
+
+  // Dúvida
+  if (
+    t === '4' ||
+    /^(4|d[uú]vida|tirar\s+uma?\s+d[uú]vida|pergunt(a|ar)|aceita\s+financiamento|informa[çc][õo]es)\b/i.test(t) ||
+    (t.endsWith('?') && t.length > 5)
+  ) {
+    return 'duvida';
+  }
+
+  return null;
+}
+
+export function extractCollectedInfo(
+  text: string,
+  currentInfo: {
+    finalidade?: string;
+    regiao?: string;
+    tipoImovel?: string;
+    faixaValor?: string;
+    quantidadeQuartos?: string;
+    formaPagamento?: string;
+    duvidaTexto?: string;
+  } = {}
+) {
+  const t = (text || '').trim();
+  const lower = t.toLowerCase();
+  const updated = { ...currentInfo };
+
+  // 1. Finalidade
+  if (!updated.finalidade) {
+    if (/\b(morar|moradia|residir|resid[êe]ncia)\b/i.test(lower)) {
+      updated.finalidade = 'morar';
+    } else if (/\b(investir|investimento|rentabilidade|renda|loca[çc][ãa]o\s+por\s+temporada|airbnb)\b/i.test(lower)) {
+      updated.finalidade = 'investir';
+    } else if (/\b(comprar|compra|aquisi[çc][ãa]o)\b/i.test(lower)) {
+      updated.finalidade = 'comprar';
+    } else if (/\b(alugar|loca[çc][ãa]o|aluguel)\b/i.test(lower)) {
+      updated.finalidade = 'alugar';
+    } else if (/\b(avaliando|ainda\s+n[ãa]o\s+decidi|n[ãa]o\s+sei|indeciso)\b/i.test(lower)) {
+      updated.finalidade = 'ainda não decidiu';
+    }
+  }
+
+  // 2. Tipo de imóvel
+  if (!updated.tipoImovel) {
+    if (/\b(apartamento|apto|flat|studio|est[úu]dio)\b/i.test(lower)) {
+      updated.tipoImovel = 'apartamento';
+    } else if (/\b(casa|sobrado|mans[ãa]o)\b/i.test(lower)) {
+      updated.tipoImovel = 'casa';
+    } else if (/\b(cobertura)\b/i.test(lower)) {
+      updated.tipoImovel = 'cobertura';
+    } else if (/\b(sala|loja|comercial|escrit[oó]rio)\b/i.test(lower)) {
+      updated.tipoImovel = 'sala ou loja comercial';
+    } else if (/\b(terreno|lote)\b/i.test(lower)) {
+      updated.tipoImovel = 'terreno';
+    }
+  }
+
+  // 3. Região / Bairro
+  if (!updated.regiao) {
+    const bairrosConhecidos = [
+      'barra da tijuca', 'barra', 'recreio dos bandeirantes', 'recreio', 'jacarepaguá', 'jacarepagua',
+      'botafogo', 'ipanema', 'leblon', 'copacabana', 'flamengo', 'laranjeiras', 'humaitá', 'humaita',
+      'tijuca', 'maracanã', 'maracana', 'vila isabel', 'grajaú', 'grajau', 'lagoa', 'gávea', 'gavea',
+      'niterói', 'niteroi', 'icarai', 'icaraí', 'centro', 'zona sul', 'zona oeste', 'zona norte'
+    ];
+    for (const b of bairrosConhecidos) {
+      if (lower.includes(b)) {
+        updated.regiao = b.charAt(0).toUpperCase() + b.slice(1);
+        break;
+      }
+    }
+    if (!updated.regiao) {
+      const regMatch = lower.match(/\b(?:em|na|no|para)\s+([a-záàâãéèêíïóôõöúçñ\s]{3,25})\b/i);
+      if (regMatch && !/(morar|investir|comprar|alugar|apartamento|casa)/i.test(regMatch[1])) {
+        updated.regiao = regMatch[1].trim();
+      }
+    }
+  }
+
+  // 4. Quantidade de quartos / tamanho
+  if (!updated.quantidadeQuartos) {
+    if (/\b(1|um)\s*quarto(s)?\b/i.test(lower) || /\b(studio|est[úu]dio)\b/i.test(lower)) {
+      updated.quantidadeQuartos = '1 quarto';
+    } else if (/\b(2|dois)\s*quarto(s)?\b/i.test(lower)) {
+      updated.quantidadeQuartos = '2 quartos';
+    } else if (/\b(3|tr[êe]s)\s*quarto(s)?\b/i.test(lower)) {
+      updated.quantidadeQuartos = '3 quartos';
+    } else if (/\b(4|quatro|5|cinco)\s*quarto(s)?\b/i.test(lower) || /4\s*ou\s*mais/i.test(lower)) {
+      updated.quantidadeQuartos = '4 ou mais quartos';
+    } else if (/\b(ainda\s+n[ãa]o\s+defini|n[ãa]o\s+sei|indiferente)\b/i.test(lower)) {
+      updated.quantidadeQuartos = 'Ainda não defini';
+    }
+  }
+
+  // 5. Faixa de valor
+  if (!updated.faixaValor) {
+    if (/at[eé]\s*(r\$)?\s*300\s*(mil)?/i.test(lower)) {
+      updated.faixaValor = 'Até R$ 300 mil';
+    } else if (/300\s*(mil)?\s*a\s*500\s*(mil)?/i.test(lower)) {
+      updated.faixaValor = 'De R$ 300 mil a R$ 500 mil';
+    } else if (/500\s*(mil)?\s*a\s*800\s*(mil)?/i.test(lower)) {
+      updated.faixaValor = 'De R$ 500 mil a R$ 800 mil';
+    } else if (/acima\s*de\s*(r\$)?\s*800\s*(mil)?/i.test(lower)) {
+      updated.faixaValor = 'Acima de R$ 800 mil';
+    } else if (/\b(ainda\s+n[ãa]o\s+defini|a\s+definir|sob\s+consulta)\b/i.test(lower)) {
+      updated.faixaValor = 'Ainda não defini';
+    } else {
+      const valMatch = t.match(/(?:at[eé]|faixa|de|em\s*torno\s*de|r\$)\s*([0-9.,]+(?:\s*(?:mil|milh[õo]es|k))?)/i);
+      if (valMatch && valMatch[1].length >= 2) {
+        updated.faixaValor = valMatch[0].trim();
+      }
+    }
+  }
+
+  // 6. Forma de pagamento
+  if (!updated.formaPagamento) {
+    if (/\b([àa]\s*vista|recursos\s*pr[oó]prios)\b/i.test(lower)) {
+      updated.formaPagamento = 'à vista';
+    } else if (/\b(financiar|financiamento|financiado|banco|caixa|parcel(ar|ado|amento))\b/i.test(lower)) {
+      updated.formaPagamento = 'financiar';
+    } else if (/\b(ainda\s+n[ãa]o\s+decidi|avaliando)\b/i.test(lower)) {
+      updated.formaPagamento = 'ainda não decidiu';
+    }
+  }
+
+  return updated;
+}
+
+function buildSystemPrompt(session: WhatsAppChatSession, companyName: string = 'Direct Houses'): string {
+  const nomeCliente = session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name) ? session.name : 'Cliente';
+  const hasValidPhone = isValidPhoneNumber(session.phone);
+  const telefoneCliente = hasValidPhone ? formatPhoneForDisplay(session.phone) : 'Pendente de validação';
+
+  const codigoImovel = session.extractedLead.codigoImovel || session.extractedLead.selectedLancamentoNome || session.extractedLead.produtoImovel || 'Não informado';
+  const linkImovel = session.extractedLead.linkImovel || 'Link não informado';
+  const intencaoAtual = session.extractedLead.intencaoAtual || 'Pendente de identificação';
+  const estadoAtendimento = session.extractedLead.estadoAtendimento || 'cadastro';
+  const info = session.extractedLead.informacoesColetadas || {};
+
+  const infoList: string[] = [];
+  if (info.finalidade) infoList.push(`Finalidade: ${info.finalidade}`);
+  if (info.regiao) infoList.push(`Região: ${info.regiao}`);
+  if (info.tipoImovel) infoList.push(`Tipo de Imóvel: ${info.tipoImovel}`);
+  if (info.quantidadeQuartos) infoList.push(`Quartos/Tamanho: ${info.quantidadeQuartos}`);
+  if (info.faixaValor) infoList.push(`Faixa de Valor: ${info.faixaValor}`);
+  if (info.formaPagamento) infoList.push(`Forma de Pagamento: ${info.formaPagamento}`);
+  if (info.duvidaTexto) infoList.push(`Dúvida Registrada: ${info.duvidaTexto}`);
+  const informacoesColetadas = infoList.length > 0 ? infoList.join(' | ') : 'Nenhuma informação específica fornecida ainda';
+
+  const lancamentosCatalogo = formatLancamentosForPrompt();
+
+  return `Você é a assistente virtual da ${companyName}, especializada em atendimento imobiliário.
+
+Seu objetivo é conduzir o cliente de forma objetiva, organizada e comercial, sem se perder, sem repetir perguntas e sem inventar informações.
+
+## REGRAS GERAIS
+
+1. Faça somente uma pergunta principal por mensagem.
+2. Nunca repita uma pergunta que o cliente já respondeu.
+3. Aproveite todas as informações fornecidas pelo cliente, mesmo quando ele responder várias coisas de uma vez.
+4. Aceite respostas por número, texto livre ou frases incompletas.
+5. Não obrigue o cliente a responder exatamente no formato das opções.
+6. Confirme brevemente o que entendeu antes de fazer a próxima pergunta.
+7. Mantenha o imóvel de origem vinculado ao atendimento.
+8. Não misture o imóvel de origem com uma nova busca sem confirmar a intenção do cliente.
+9. Não invente preço, disponibilidade, metragem, localização, condições de financiamento ou características de imóveis.
+10. Quando não tiver certeza, informe que a confirmação será feita por um consultor.
+11. Depois de duas tentativas sem entender a resposta, ofereça atendimento humano.
+12. Não faça um interrogatório. Colete apenas as informações necessárias para o próximo passo.
+13. Se o cliente mudar de assunto, identifique a nova intenção e conduza o fluxo correspondente.
+14. Se o cliente fornecer todas as informações necessárias, não continue fazendo perguntas desnecessárias.
+
+## DADOS DO ATENDIMENTO
+
+Variáveis atuais do cliente (preserve e utilize):
+- Nome do cliente: {{nome_cliente}} = "${nomeCliente}"
+- Telefone: {{telefone_cliente}} = "${telefoneCliente}"
+- Código do imóvel de origem: {{codigo_imovel}} = "${codigoImovel}"
+- Link do imóvel de origem: {{link_imovel}} = "${linkImovel}"
+- Intenção atual: {{intencao_atual}} = "${intencaoAtual}"
+- Informações já fornecidas: {{informacoes_coletadas}} = "${informacoesColetadas}"
+- Estado do atendimento: {{estado_atendimento}} = "${estadoAtendimento}"
+
+## ETAPA DE CADASTRO INICIAL (NOME E TELEFONE)
+- Se ainda não tiver o telefone com DDD do cliente, solicite com simpatia:
+  "Para que possamos te passar todos os detalhes, fotos e condições com nossos corretores, qual é o seu *número de WhatsApp com DDD*?"
+- Se ainda não tiver o nome do cliente, pergunte o nome completo.
+- NUNCA envie o menu ou transfira sem ter o telefone com DDD confirmado!
+
+## PRIMEIRA MENSAGEM APÓS O CADASTRO
+Assim que o contato estiver cadastrado (nome e telefone conhecidos) e nenhuma opção de menu foi escolhida ainda, envie:
+
+"Perfeito, ${nomeCliente}! Seu contato foi registrado com sucesso.
+${codigoImovel !== 'Não informado' ? `\nVocê demonstrou interesse no imóvel ${codigoImovel}${linkImovel !== 'Link não informado' ? `, enviado neste link: ${linkImovel}` : ''}.\n` : ''}
+Como prefere continuar?
+
+1️⃣ Aguardar o contato do consultor
+2️⃣ Conhecer lançamentos na planta
+3️⃣ Buscar imóveis prontos para comprar ou alugar
+4️⃣ Tirar uma dúvida agora
+
+Responda com o número da opção ou escreva diretamente o que você deseja."
+
+## IDENTIFICAÇÃO DA INTENÇÃO
+Classifique a resposta do cliente em uma destas intenções:
+- aguardar_corretor
+- lancamentos_na_planta
+- imoveis_prontos
+- duvida
+- atendimento_humano
+
+Interprete também frases como:
+- "Pode pedir para o corretor me chamar" = aguardar_corretor
+- "Quero ver apartamentos novos" = lancamentos_na_planta
+- "Estou procurando uma casa para comprar" = imoveis_prontos
+- "Esse imóvel aceita financiamento?" = duvida
+- "Quero falar com uma pessoa" = atendimento_humano
+
+Se houver dúvida sobre a intenção, faça apenas uma pergunta de esclarecimento.
+
+## FLUXO 1 — AGUARDAR O CORRETOR
+Se o cliente escolher essa opção, responda:
+"Perfeito, ${nomeCliente}. Seu interesse no imóvel ${codigoImovel !== 'Não informado' ? codigoImovel : 'de interesse'} já foi encaminhado ao consultor responsável.
+
+Ele continuará o atendimento e poderá informar os próximos passos. Se precisar de algo, você também pode enviar uma mensagem por aqui."
+
+Depois disso:
+- Defina o estado como aguardando_corretor.
+- Não apresente novamente o menu imediatamente.
+- Não faça novas perguntas.
+- Não prometa prazo de contato, salvo se houver um prazo definido pelo sistema.
+
+## FLUXO 2 — LANÇAMENTOS NA PLANTA
+Colete as informações uma por vez, nesta ordem:
+1. Finalidade (se ainda não informou):
+   - morar
+   - investir
+   - ainda não decidiu
+   Pergunte: "Ótimo! Você procura um lançamento na planta para morar, investir ou ainda está avaliando?"
+
+2. Região (se ainda não informou):
+   "Em qual cidade ou região você gostaria de encontrar o lançamento?"
+
+3. Faixa de valor (se ainda não informou):
+   "Qual faixa de valor você pretende considerar?"
+   Opções sugeridas:
+   - Até R$ 300 mil
+   - De R$ 300 mil a R$ 500 mil
+   - De R$ 500 mil a R$ 800 mil
+   - Acima de R$ 800 mil
+   - Ainda não defini
+
+4. Quantidade de quartos (se ainda não informou):
+   "Você procura um imóvel com quantos quartos?"
+   Opções sugeridas:
+   - 1 quarto
+   - 2 quartos
+   - 3 quartos
+   - 4 ou mais quartos
+   - Ainda não defini
+
+5. Forma de pagamento, somente se necessário:
+   "Você pretende comprar à vista, financiar ou ainda não decidiu?"
+
+Quando tiver informações suficientes, diga:
+"Entendi. Você procura um imóvel para {{finalidade}}, em {{regiao}}, com {{quantidade_quartos}} quartos e na faixa de {{faixa_valor}}. Vou verificar as opções compatíveis para esse perfil."
+E em seguida, apresente os lançamentos autorizados do catálogo abaixo que melhor combinam com essa busca.
+Não repita perguntas já respondidas.
+
+## FLUXO 3 — IMÓVEIS PRONTOS
+Colete as informações uma por vez, nesta ordem:
+1. Finalidade (se ainda não informou):
+   "Você procura um imóvel pronto para comprar ou alugar?" (Comprar | Alugar | Ainda não decidi)
+
+2. Região (se ainda não informou):
+   "Em qual cidade ou região você deseja procurar?"
+
+3. Tipo de imóvel (se ainda não informou):
+   "Qual tipo de imóvel você procura?" (Apartamento | Casa | Sala ou loja comercial | Terreno | Outro)
+
+4. Quartos ou tamanho (se ainda não informou):
+   "Você precisa de quantos quartos ou qual tamanho aproximado?"
+
+5. Faixa de valor (se ainda não informou):
+   "Qual faixa de valor pretende considerar?"
+
+Quando tiver informações suficientes, confirme:
+"Entendi. Você procura {{tipo_imovel}} para {{finalidade}}, em {{regiao}}, com a necessidade de {{quartos_ou_tamanho}}, na faixa de {{faixa_valor}}."
+Depois, informe que as opções compatíveis serão verificadas e encaminhadas por nossos consultores.
+
+## FLUXO 4 — TIRAR UMA DÚVIDA
+Responda:
+"Claro. Escreva sua dúvida em uma única mensagem. Posso ajudar com informações sobre o imóvel, localização, documentação, financiamento, valores ou processo de compra e aluguel."
+
+Ao receber a dúvida:
+1. Responda somente o que puder afirmar com segurança com base no catálogo autorizado.
+2. Não invente dados comerciais.
+3. Se depender de confirmação, diga claramente que será necessário consultar o corretor.
+4. Mantenha o imóvel ${codigoImovel !== 'Não informado' ? codigoImovel : 'de interesse'} como referência, salvo se o cliente indicar outro imóvel.
+5. Se a dúvida exigir análise jurídica, documental ou financeira específica, encaminhe para um consultor.
+
+## FLUXO 5 — ATENDIMENTO HUMANO
+Se o cliente pedir uma pessoa, corretor ou consultor, responda:
+"Claro. Vou encaminhar seu atendimento para um consultor da ${companyName}. Ele continuará o contato com você e terá acesso às informações já registradas."
+
+Depois:
+- Defina o estado como atendimento_humano.
+- Não faça novas perguntas.
+- Não reinicie o fluxo.
+- Preserve todas as informações já coletadas.
+
+## CORREÇÃO DE RESPOSTAS
+Se o cliente responder algo incompleto, não reinicie o atendimento. Confirme brevemente e faça apenas a próxima pergunta pendente.
+Se o cliente responder várias informações juntas em uma frase, registre todas e faça apenas a pergunta que ainda seja necessária.
+
+## TOM DE VOZ
+- profissional;
+- direto;
+- cordial;
+- comercial;
+- empático;
+- organizado.
+Evite: textos longos; excesso de emojis; repetir o menu; fazer quatro ou cinco perguntas na mesma mensagem; promessas que não possam ser cumpridas; respostas genéricas; inventar informações sobre imóveis.
+
+BASE DE CONHECIMENTO DE LANÇAMENTOS AUTORIZADA DA ${companyName}:
+${lancamentosCatalogo}`;
 }
 
 /**
@@ -350,327 +625,193 @@ function getFallbackReply(
 
   const hasValidPhone = isValidPhoneNumber(session.phone);
   const displayPhone = hasValidPhone ? formatPhoneForDisplay(session.phone) : '';
+  const hasName = Boolean(session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name));
 
-  // 1. If no valid phone, ALWAYS ask for phone first (Etapa 1B / Patch F)
-  // Even if user asked for human broker, we CANNOT transfer without a valid phone!
-  const isHumanReq = isExplicitCloseRequest(lowerLastMsg) || lowerLastMsg === '6';
-
+  // 1. If no valid phone, ALWAYS ask for phone first
+  const isHumanReq = isExplicitCloseRequest(lowerLastMsg) || lowerLastMsg === '5' || lowerLastMsg === '6';
   if (!hasValidPhone) {
     if (isHumanReq) {
       return (
-        `Com certeza${session.name !== 'Cliente' ? `, *${session.name}*` : ''}! 😊\n\n` +
-        `Para eu te transferir agora para o corretor especialista, por favor me confirma seu *WhatsApp com DDD*? ` +
-        `(ex: 21 99999-9999)`
+        `Com certeza${hasName ? `, *${session.name}*` : ''}! 😊\n\n` +
+        `Para que eu possa transferir seu atendimento para o consultor especialista da ${companyName}, qual é o seu *número de WhatsApp com DDD*? (ex: 21 99999-9999)`
       );
     }
     return (
-      `Olá${session.name !== 'Cliente' ? `, *${session.name}*` : ''}! 😊\n\n` +
-      `Para eu te conectar ao corretor certo, me confirma seu *WhatsApp com DDD*? ` +
-      `(ex: 21 99999-9999)`
+      `Olá${hasName ? `, *${session.name}*` : ''}! Seja muito bem-vindo(a) à ${companyName}. 🏡\n\n` +
+      `Para começarmos o seu atendimento exclusivo e passarmos todos os detalhes dos imóveis, qual é o seu *número de WhatsApp com DDD*? (ex: 21 99999-9999)`
     );
   }
 
-  // 2. Check if user requested human broker (only reached when phone is valid!)
-  if (isHumanReq) {
+  // 2. Name check: if phone is known but name is not
+  if (!hasName) {
+    return (
+      `Olá! Seja muito bem-vindo(a) à ${companyName}. 🏡\n\n` +
+      `Identifiquei seu WhatsApp como *${displayPhone}*.\n` +
+      `Para começarmos, qual é o seu *nome completo*?`
+    );
+  }
+
+  // Ensure extracted property code & link are up to date
+  const propInfo = extractPropertyCodeAndLink(session.initialMessage + ' ' + lastUserMsg);
+  if (propInfo.code && !session.extractedLead.codigoImovel) session.extractedLead.codigoImovel = propInfo.code;
+  if (propInfo.link && !session.extractedLead.linkImovel) session.extractedLead.linkImovel = propInfo.link;
+
+  const codigoImovel = session.extractedLead.codigoImovel || session.extractedLead.selectedLancamentoNome || session.extractedLead.produtoImovel || 'Não informado';
+  const linkImovel = session.extractedLead.linkImovel || 'Link não informado';
+
+  // Extract ongoing collected information
+  session.extractedLead.informacoesColetadas = extractCollectedInfo(lastUserMsg, session.extractedLead.informacoesColetadas);
+  const info = session.extractedLead.informacoesColetadas || {};
+
+  // Check intent detection
+  const detectedIntent = classifyIntent(lastUserMsg);
+  if (detectedIntent) {
+    session.extractedLead.intencaoAtual = detectedIntent;
+  }
+
+  const currentIntent = session.extractedLead.intencaoAtual;
+
+  // 3. Hand off to human (FLUXO 5)
+  if (currentIntent === 'atendimento_humano' || isHumanReq) {
+    session.extractedLead.intencaoAtual = 'atendimento_humano';
+    session.extractedLead.estadoAtendimento = 'atendimento_humano';
+    session.extractedLead.tipoAtendimento = 'Atendimento Humano';
+    session.extractedLead.isComplete = true;
     session.extractedLead.humanRequested = true;
+    return `Claro. Vou encaminhar seu atendimento para um consultor da ${companyName}. Ele continuará o contato com você e terá acesso às informações já registradas.`;
+  }
+
+  // 4. Aguardar corretor (FLUXO 1)
+  if (currentIntent === 'aguardar_corretor') {
+    session.extractedLead.intencaoAtual = 'aguardar_corretor';
+    session.extractedLead.estadoAtendimento = 'aguardando_corretor';
     session.extractedLead.tipoAtendimento = 'Aguardando contato do corretor';
     session.extractedLead.isComplete = true;
-    const finalNome = session.name !== 'Cliente' ? session.name : '';
-    return `Perfeito${finalNome ? `, *${finalNome}*` : ''}! Estou transferindo seu atendimento agora mesmo para um de nossos corretores especialistas da ${companyName}. Em instantes ele te chamará aqui no WhatsApp com todo o material! 👍`;
+    session.extractedLead.humanRequested = true;
+    return (
+      `Perfeito, ${session.name}. Seu interesse no imóvel ${codigoImovel !== 'Não informado' ? codigoImovel : 'de interesse'} já foi encaminhado ao consultor responsável.\n\n` +
+      `Ele continuará o atendimento e poderá informar os próximos passos. Se precisar de algo, você também pode enviar uma mensagem por aqui.`
+    );
   }
 
-  // 1. Initial Greeting
-  if (userMsgs.length === 1) {
-    if (hasValidPhone) {
-      if (session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name)) {
-        return (
-          `Olá, *${session.name}*! Seja muito bem-vindo(a) à *${companyName}*. 🏡\n\n` +
-          `Identifiquei seu número de WhatsApp como *${displayPhone}*. Este é o seu melhor telefone para contato ou prefere informar outro?`
-        );
-      } else {
-        return (
-          `Olá! Seja muito bem-vindo(a) à *${companyName}*. 🏡\n\n` +
-          `Identifiquei seu WhatsApp como *${displayPhone}*.\n` +
-          `Para começarmos nosso atendimento, qual é o seu *nome completo*?`
-        );
-      }
-    } else {
-      if (session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name)) {
-        return (
-          `Olá, *${session.name}*! Seja muito bem-vindo(a) à *${companyName}*. 🏡\n\n` +
-          `Para podermos te atender e encaminhar fotos e detalhes dos imóveis, qual é o seu *número de WhatsApp com DDD*?`
-        );
-      } else {
-        return (
-          `Olá! Seja muito bem-vindo(a) à *${companyName}*. 🏡\n\n` +
-          `Para começarmos o seu atendimento exclusivo, qual é o seu *nome completo* e o seu *número de WhatsApp com DDD*?`
-        );
-      }
+  // 5. Lançamentos na Planta (FLUXO 2)
+  if (currentIntent === 'lancamentos_na_planta') {
+    session.extractedLead.estadoAtendimento = 'coletando_lancamento';
+    session.extractedLead.tipoAtendimento = 'Lançamento na Planta';
+
+    if (!info.finalidade) {
+      return `Ótimo! Você procura um lançamento na planta para morar, investir ou ainda está avaliando?`;
     }
-  }
-
-  // 2. Need Phone (Patch F)
-  if (!hasValidPhone) {
-    return (
-      `Olá${session.name !== 'Cliente' ? `, *${session.name}*` : ''}! 😊\n\n` +
-      `Para eu te conectar ao corretor certo, me confirma seu *WhatsApp com DDD*? ` +
-      `(ex: 21 99999-9999)`
-    );
-  }
-
-  // 2B. Confirm Phone if user just provided name or phone wasn't confirmed
-  const phoneConfirmed =
-    session.extractedLead.phoneConfirmed ||
-    /\b(sim|este|esse|correto|pode ser|isso|ok|beleza|perfeito|certo)\b/i.test(lastUserMsg);
-
-  if (session.name !== 'Cliente' && !phoneConfirmed && userMsgs.length === 2 && !session.extractedLead.tipoAtendimento) {
-    return (
-      `Muito prazer em falar com você, *${session.name}*! 😊\n\n` +
-      `Identifiquei seu número de WhatsApp como *${displayPhone}*. Está correto para o corretor entrar em contato ou prefere informar outro?`
-    );
-  }
-
-  // 3. Confirm Capture & Stage 3 Decision Menu
-  if (hasValidPhone && !session.extractedLead.tipoAtendimento) {
-    const lastIsOption1 = isExplicitCloseRequest(lowerLastMsg);
-    const lastIsOption2 =
-      lowerLastMsg === '2' ||
-      /\blan[çc]amento(s)?\b|na planta|em constru[çc][ãa]o/i.test(lowerLastMsg);
-    const lastIsOption3 =
-      lowerLastMsg === '3' ||
-      /\bcompr(ar|a|o)?\b|\balug(ar|uel|o)?\b|im[oó]ve(l|is) pronto(s)?/i.test(lowerLastMsg);
-    const lastIsOption4 =
-      lowerLastMsg === '4' ||
-      /d[uú]vida/i.test(lowerLastMsg);
-
-    if (lastIsOption1) {
-      session.extractedLead.tipoAtendimento = 'Aguardando contato do corretor';
-      session.extractedLead.isComplete = true;
-      if (!session.extractedLead.trilhaNavegacao.includes('Optou por aguardar contato do corretor')) {
-        session.extractedLead.trilhaNavegacao.push('Optou por aguardar contato do corretor');
-      }
+    if (!info.regiao) {
+      return `Em qual cidade ou região você gostaria de encontrar o lançamento?`;
+    }
+    if (!info.faixaValor) {
       return (
-        `Perfeito, *${session.name}*! 👍\n\n` +
-        `Sua solicitação já foi registrada e encaminhada ao nosso corretor especialista da ${companyName}.\n` +
-        `Em instantes ele entrará em contato com você aqui no WhatsApp para te dar todo o atendimento e suporte! 🏡 Tenha um excelente dia!`
+        `Qual faixa de valor você pretende considerar?\n\n` +
+        `• Até R$ 300 mil\n` +
+        `• De R$ 300 mil a R$ 500 mil\n` +
+        `• De R$ 500 mil a R$ 800 mil\n` +
+        `• Acima de R$ 800 mil\n` +
+        `• Ainda não defini`
       );
-    } else if (lastIsOption2) {
-      session.extractedLead.tipoAtendimento = 'Lançamento na Planta';
-      if (!session.extractedLead.trilhaNavegacao.includes('Interesse: Lançamentos na Planta')) {
-        session.extractedLead.trilhaNavegacao.push('Interesse: Lançamentos na Planta');
-      }
+    }
+    if (!info.quantidadeQuartos) {
       return (
-        `Excelente! Conheça nossos lançamentos exclusivos na planta:\n\n` +
-        activeLanc.map((l, i) => `${i + 1}️⃣ *${l.nome}* (${l.bairro}) - ${l.tipologias}`).join('\n') +
-        `\n\nQual desses empreendimentos você gostaria de conhecer melhor? (Digite o número ou o nome)`
+        `Você procura um imóvel com quantos quartos?\n\n` +
+        `• 1 quarto\n` +
+        `• 2 quartos\n` +
+        `• 3 quartos\n` +
+        `• 4 ou mais quartos\n` +
+        `• Ainda não defini`
       );
-    } else if (lastIsOption3) {
-      session.extractedLead.tipoAtendimento = 'Comprar ou Alugar Imóvel Pronto';
-      if (!session.extractedLead.trilhaNavegacao.includes('Interesse: Imóveis Prontos')) {
-        session.extractedLead.trilhaNavegacao.push('Interesse: Imóveis Prontos');
-      }
-      return `Perfeito! Que tipo de imóvel você tem em mente (apartamento, casa ou cobertura) e qual a sua região ou bairro de preferência?`;
-    } else if (lastIsOption4) {
-      session.extractedLead.tipoAtendimento = 'Tirar Dúvidas';
-      if (!session.extractedLead.trilhaNavegacao.includes('Interesse: Tirar Dúvidas')) {
-        session.extractedLead.trilhaNavegacao.push('Interesse: Tirar Dúvidas');
-      }
-      return `Com certeza, *${session.name}*! Como posso te ajudar? Pode enviar sua dúvida aqui que te responderei imediatamente.`;
+    }
+    if (!info.formaPagamento && userMsgs.length < 5) {
+      return `Você pretende comprar à vista, financiar ou ainda não decidiu?`;
     }
 
-    // Se acabou de informar o telefone, envia o Menu Decisório Inteligente:
-    const originNotice =
-      session.extractedLead.produtoImovel &&
-      session.extractedLead.produtoImovel !== 'A combinar com corretor' &&
-      session.extractedLead.produtoImovel !== 'Não informado'
-        ? ` referente ao seu interesse no imóvel *${session.extractedLead.produtoImovel}*`
-        : '';
-
+    session.extractedLead.isComplete = true;
+    session.extractedLead.estadoAtendimento = 'lancamentos_concluido';
+    const lancList = activeLanc.map((l, i) => `${i + 1}️⃣ *${l.nome}* (${l.bairro}) - ${l.tipologias}`).join('\n');
     return (
-      `Perfeito, *${session.name}*! Já registrei seu contato com sucesso${originNotice}. Nosso consultor especialista entrará em contato com você em instantes! 👍\n\n` +
-      `Enquanto preparamos o seu atendimento, como prefere prosseguir?\n\n` +
-      `1️⃣ *Aguardar contato do corretor* (Já é o suficiente, aguardo a mensagem)\n` +
-      `2️⃣ *Conhecer nossos Lançamentos na Planta* (Fotos, plantas e valores no chat)\n` +
-      `3️⃣ *Buscar Imóveis Prontos* (Comprar ou alugar)\n` +
-      `4️⃣ *Tirar uma dúvida rápida agora*`
+      `Entendi. Você procura um imóvel para ${info.finalidade || 'morar ou investir'}, em ${info.regiao || 'região de preferência'}, com ${info.quantidadeQuartos || 'quartos a definir'} e na faixa de ${info.faixaValor || 'valor a combinar'}. Vou verificar as opções compatíveis para esse perfil.\n\n` +
+      `Temos opções autorizadas de lançamentos que podem te interessar:\n\n` +
+      `${lancList}\n\n` +
+      `Qual desses empreendimentos gostaria de conhecer melhor ou prefere que nosso consultor envie a apresentação completa?`
     );
   }
 
-  // 4. LANÇAMENTOS SUB-MENU & EXPLORATION FLOW
-  if (session.extractedLead.tipoAtendimento.includes('Lançamento')) {
-    // 4A. Se nenhum lançamento foi selecionado ainda:
-    if (!session.extractedLead.selectedLancamentoNome) {
-      // Verificar se a mensagem atual é uma seleção (ex: "1", "2", ou nome)
-      let selected: Lancamento | undefined;
-      const numChoice = parseInt(lastUserMsg.replace(/\D/g, ''), 10);
-      if (!isNaN(numChoice) && numChoice >= 1 && numChoice <= activeLanc.length) {
-        selected = activeLanc[numChoice - 1];
-      } else {
-        selected = activeLanc.find(
-          (l) =>
-            lowerLastMsg.includes(l.nome.toLowerCase()) ||
-            (l.bairro && lowerLastMsg.includes(l.bairro.toLowerCase()))
-        );
-      }
+  // 6. Imóveis Prontos (FLUXO 3)
+  if (currentIntent === 'imoveis_prontos') {
+    session.extractedLead.estadoAtendimento = 'coletando_prontos';
+    session.extractedLead.tipoAtendimento = 'Imóveis Prontos';
 
-      if (selected) {
-        session.extractedLead.selectedLancamentoId = selected.id;
-        session.extractedLead.selectedLancamentoNome = selected.nome;
-        session.extractedLead.produtoImovel = `Lançamento ${selected.nome} (${selected.tipologias})`;
-        if (!session.extractedLead.trilhaNavegacao.includes(`Selecionou: ${selected.nome}`)) {
-          session.extractedLead.trilhaNavegacao.push(`Selecionou: ${selected.nome}`);
-        }
-
-        return (
-          `Excelente escolha! O *${selected.nome}* é um empreendimento espetacular em ${selected.bairro}. 🏢✨\n\n` +
-          `• *Tipologias:* ${selected.tipologias}\n` +
-          (selected.metragens ? `• *Metragens:* ${selected.metragens}\n` : '') +
-          (selected.precoAPartirDe ? `• *Valores:* A partir de ${selected.precoAPartirDe}\n\n` : '\n') +
-          `O que você gostaria de conferir agora?\n\n` +
-          `1️⃣ 📸 *Fotos e Imagens*\n` +
-          `2️⃣ 📝 *Descrição e Conceito do Projeto*\n` +
-          `3️⃣ 📍 *Localização e Pontos de Referência*\n` +
-          `4️⃣ 🌳 *Vizinhança e Lazer do Condomínio*\n` +
-          `5️⃣ 💰 *Valores e Condições de Pagamento*\n` +
-          `6️⃣ 💬 *Falar com um Corretor Especialista / Agendar Visita*`
-        );
-      } else {
-        return (
-          `Temos excelentes opções de *Lançamentos na planta* disponíveis:\n\n` +
-          activeLanc
-            .map(
-              (l, i) =>
-                `🏢 *${i + 1}️⃣ ${l.nome}* (${l.bairro})\n• Tipologias: ${l.tipologias}\n• Preço: ${
-                  l.precoAPartirDe || 'Sob consulta'
-                }`
-            )
-            .join('\n\n') +
-          `\n\nQual desses lançamentos você gostaria de conhecer? (Responda com o número ou nome)`
-        );
-      }
+    if (!info.finalidade) {
+      return (
+        `Você procura um imóvel pronto para comprar ou alugar?\n\n` +
+        `• Comprar\n` +
+        `• Alugar\n` +
+        `• Ainda não decidi`
+      );
+    }
+    if (!info.regiao) {
+      return `Em qual cidade ou região você deseja procurar?`;
+    }
+    if (!info.tipoImovel) {
+      return (
+        `Qual tipo de imóvel você procura?\n\n` +
+        `• Apartamento\n` +
+        `• Casa\n` +
+        `• Sala ou loja comercial\n` +
+        `• Terreno\n` +
+        `• Outro`
+      );
+    }
+    if (!info.quantidadeQuartos) {
+      return `Você precisa de quantos quartos ou qual tamanho aproximado?`;
+    }
+    if (!info.faixaValor) {
+      return `Qual faixa de valor pretende considerar?`;
     }
 
-    // 4B. Lançamento já selecionado - Processar Submenu
-    const currentLanc =
-      activeLanc.find((l) => l.id === session.extractedLead.selectedLancamentoId) ||
-      activeLanc.find((l) => l.nome === session.extractedLead.selectedLancamentoNome) ||
-      activeLanc[0];
-
-    if (currentLanc) {
-      // Opção 1: Fotos
-      if (lowerLastMsg === '1' || lowerLastMsg.includes('foto') || lowerLastMsg.includes('imagem') || lowerLastMsg.includes('galeria') || lowerLastMsg.includes('perspectiva')) {
-        if (!session.extractedLead.trilhaNavegacao.includes(`Consultou Fotos (${currentLanc.nome})`)) {
-          session.extractedLead.trilhaNavegacao.push(`Consultou Fotos (${currentLanc.nome})`);
-        }
-        
-        let fotosMsg = '';
-        if (currentLanc.fotosUpload && currentLanc.fotosUpload.length > 0) {
-          fotosMsg = `Acabei de enviar as fotos e perspectivas oficiais do projeto diretamente aqui no nosso chat! 📲\n`;
-          if (currentLanc.urlPublicaDirectHouse) {
-            fotosMsg += `\nVocê também pode conferir mais fotos e tour virtual no link oficial:\n${currentLanc.urlPublicaDirectHouse}\n`;
-          }
-        } else {
-          const fotosInfo = currentLanc.fotos || currentLanc.urlPublicaDirectHouse || 'Fotos e perspectivas disponíveis com o consultor.';
-          fotosMsg = `Confira as imagens autorizadas do projeto:\n${fotosInfo}\n`;
-        }
-
-        return (
-          `📸 *Fotos e Perspectivas do ${currentLanc.nome}:*\n\n` +
-          `${fotosMsg}\n` +
-          `Gostaria de ver outro detalhe do projeto?\n` +
-          `2️⃣ Descrição | 3️⃣ Localização | 4️⃣ Vizinhança/Lazer | 5️⃣ Valores | 6️⃣ Falar com Corretor`
-        );
-      }
-
-      // Opção 2: Descrição / Conceito
-      if (lowerLastMsg === '2' || lowerLastMsg.includes('descri') || lowerLastMsg.includes('conceito') || lowerLastMsg.includes('projeto') || lowerLastMsg.includes('planta')) {
-        if (!session.extractedLead.trilhaNavegacao.includes(`Consultou Descrição (${currentLanc.nome})`)) {
-          session.extractedLead.trilhaNavegacao.push(`Consultou Descrição (${currentLanc.nome})`);
-        }
-        const descInfo = currentLanc.descricao || currentLanc.conteudoPublicoAutorizado || `Empreendimento moderno em ${currentLanc.bairro} com alto padrão de acabamento.`;
-        return (
-          `📝 *Conceito do Projeto - ${currentLanc.nome}:*\n\n` +
-          `${descInfo}\n\n` +
-          `Deseja conferir mais alguma informação?\n` +
-          `1️⃣ Fotos | 3️⃣ Localização | 4️⃣ Vizinhança/Lazer | 5️⃣ Valores | 6️⃣ Falar com Corretor`
-        );
-      }
-
-      // Opção 3: Localização / Referências
-      if (lowerLastMsg === '3' || lowerLastMsg.includes('local') || lowerLastMsg.includes('onde fica') || lowerLastMsg.includes('bairro') || lowerLastMsg.includes('referencia') || lowerLastMsg.includes('referência')) {
-        if (!session.extractedLead.trilhaNavegacao.includes(`Consultou Localização (${currentLanc.nome})`)) {
-          session.extractedLead.trilhaNavegacao.push(`Consultou Localização (${currentLanc.nome})`);
-        }
-        const locInfo = currentLanc.localidade || `${currentLanc.bairro} (${currentLanc.cidade})`;
-        return (
-          `📍 *Localização e Referências - ${currentLanc.nome}:*\n\n` +
-          `${locInfo}\n\n` +
-          `Deseja conferir mais alguma informação?\n` +
-          `1️⃣ Fotos | 2️⃣ Descrição | 4️⃣ Vizinhança/Lazer | 5️⃣ Valores | 6️⃣ Falar com Corretor`
-        );
-      }
-
-      // Opção 4: Vizinhança / Lazer
-      if (lowerLastMsg === '4' || lowerLastMsg.includes('vizinhan') || lowerLastMsg.includes('lazer') || lowerLastMsg.includes('diferencia') || lowerLastMsg.includes('piscina') || lowerLastMsg.includes('academia')) {
-        if (!session.extractedLead.trilhaNavegacao.includes(`Consultou Lazer/Vizinhança (${currentLanc.nome})`)) {
-          session.extractedLead.trilhaNavegacao.push(`Consultou Lazer/Vizinhança (${currentLanc.nome})`);
-        }
-        const lazerInfo = currentLanc.diferenciais || 'Lazer completo e infraestrutura moderna de condomínio.';
-        const vizInfo = currentLanc.vizinhanca ? `\n\n🌳 *Vizinhança e Entorno:*\n${currentLanc.vizinhanca}` : '';
-        return (
-          `🏊 *Lazer e Diferenciais - ${currentLanc.nome}:*\n\n` +
-          `${lazerInfo}${vizInfo}\n\n` +
-          `Deseja conferir mais alguma informação?\n` +
-          `1️⃣ Fotos | 2️⃣ Descrição | 3️⃣ Localização | 5️⃣ Valores | 6️⃣ Falar com Corretor`
-        );
-      }
-
-      // Opção 5: Valores / Condições
-      if (lowerLastMsg === '5' || lowerLastMsg.includes('valor') || lowerLastMsg.includes('preco') || lowerLastMsg.includes('preço') || lowerLastMsg.includes('quanto') || lowerLastMsg.includes('condi') || lowerLastMsg.includes('pagamento')) {
-        if (!session.extractedLead.trilhaNavegacao.includes(`Consultou Valores/Condições (${currentLanc.nome})`)) {
-          session.extractedLead.trilhaNavegacao.push(`Consultou Valores/Condições (${currentLanc.nome})`);
-        }
-        const precoInfo = currentLanc.precoAPartirDe || 'Valores sob consulta com nossos especialistas.';
-        const condicoesInfo = currentLanc.condicoesComerciais ? `\n• *Condições:* ${currentLanc.condicoesComerciais}` : '';
-        return (
-          `💰 *Valores e Condições - ${currentLanc.nome}:*\n\n` +
-          `• *Preço:* A partir de ${precoInfo}${condicoesInfo}\n\n` +
-          `Gostaria de solicitar uma simulação personalizada com o corretor responsável?\n` +
-          `Digite *6* para falar com o corretor ou escolha outra opção (1️⃣ Fotos | 2️⃣ Descrição | 3️⃣ Localização | 4️⃣ Lazer).`
-        );
-      }
-    }
+    session.extractedLead.isComplete = true;
+    session.extractedLead.estadoAtendimento = 'prontos_concluido';
+    return (
+      `Entendi. Você procura ${info.tipoImovel || 'imóvel pronto'} para ${info.finalidade || 'comprar ou alugar'}, em ${info.regiao || 'região informada'}, com a necessidade de ${info.quantidadeQuartos || 'tamanho adequado'}, na faixa de ${info.faixaValor || 'valor informado'}.\n\n` +
+      `Vou verificar as opções compatíveis para esse perfil e nosso consultor entrará em contato em instantes com a seleção ideal para você.`
+    );
   }
 
-  // 4. Imóveis Prontos / Venda / Locação
-  if (!session.extractedLead.produtoImovel) {
-    if (/(quarto|casa|apto|apartamento|cobertura|sala|terreno|lote|imovel|reserva|iconic|bairro|barra|botafogo)/i.test(lastUserMsg) && lastUserMsg.length > 2) {
-      session.extractedLead.produtoImovel = lastUserMsg;
-      if (!session.extractedLead.trilhaNavegacao.includes(`Informou imóvel: ${lastUserMsg}`)) {
-        session.extractedLead.trilhaNavegacao.push(`Informou imóvel: ${lastUserMsg}`);
-      }
-    } else {
-      return `Excelente! Que tipo de imóvel você tem em mente? (Por exemplo: apartamento de 2 ou 3 quartos, casa em condomínio, ou bairro de preferência...)`;
+  // 7. Tirar uma Dúvida (FLUXO 4)
+  if (currentIntent === 'duvida') {
+    session.extractedLead.estadoAtendimento = 'respondendo_duvida';
+    session.extractedLead.tipoAtendimento = 'Dúvidas sobre Imóvel';
+
+    if (!info.duvidaTexto && userMsgs.length <= 2) {
+      return `Claro. Escreva sua dúvida em uma única mensagem. Posso ajudar com informações sobre o imóvel, localização, documentação, financiamento, valores ou processo de compra e aluguel.`;
     }
+
+    info.duvidaTexto = lastUserMsg;
+    session.extractedLead.isComplete = true;
+    return (
+      `Registrei sua dúvida: "${lastUserMsg}".\n\n` +
+      `Essa possibilidade depende da documentação do imóvel, das condições da negociação e da análise do comprador. O consultor responsável da ${companyName} precisa confirmar essa informação com exatidão. Já encaminhei sua dúvida para ele, que te responderá por aqui em instantes!`
+    );
   }
 
-  // 5. Observações & Budget
-  if (!session.extractedLead.observacoes) {
-    if (userMsgs.length >= 4) {
-      session.extractedLead.observacoes = lastUserMsg !== session.extractedLead.produtoImovel ? lastUserMsg : 'Sem observações adicionais.';
-      if (!session.extractedLead.trilhaNavegacao.includes(`Observação: ${session.extractedLead.observacoes}`)) {
-        session.extractedLead.trilhaNavegacao.push(`Observação: ${session.extractedLead.observacoes}`);
-      }
-    } else {
-      return `Perfeito! Há alguma preferência importante (como vaga de garagem, faixa de valor/investimento ou urgência)? Se não houver, pode me dizer apenas "sem observações".`;
-    }
-  }
+  // 8. PRIMEIRA MENSAGEM APÓS O CADASTRO (quando telefone e nome já estão cadastrados, mas sem intenção selecionada)
+  session.extractedLead.estadoAtendimento = 'menu_inicial';
+  const imovelNotif = codigoImovel !== 'Não informado'
+    ? `\n\nVocê demonstrou interesse no imóvel ${codigoImovel}${linkImovel !== 'Link não informado' ? `, enviado neste link: ${linkImovel}` : ''}.`
+    : '';
 
-  // 6. Encerramento oficial
-  const finalNome = session.extractedLead.nome || session.name || 'Cliente';
   return (
-    `Muito obrigado por todas as informações, *${finalNome}*! 👍\n\n` +
-    `Já registrei seu interesse e estou conectando você agora ao nosso corretor especialista da ${companyName}. Em instantes ele entrará em contato com você aqui no WhatsApp com todos os detalhes e materiais exclusivos!`
+    `Perfeito, ${session.name}! Seu contato foi registrado com sucesso.${imovelNotif}\n\n` +
+    `Como prefere continuar?\n\n` +
+    `1️⃣ Aguardar o contato do consultor\n` +
+    `2️⃣ Conhecer lançamentos na planta\n` +
+    `3️⃣ Buscar imóveis prontos para comprar ou alugar\n` +
+    `4️⃣ Tirar uma dúvida agora\n\n` +
+    `Responda com o número da opção ou escreva diretamente o que você deseja.`
   );
 }
 
@@ -717,6 +858,10 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
   const displayPhone = hasValidPhone ? formatPhoneForDisplay(session.phone) : 'Não informado';
 
   // 3. Detect origin property from initial message if available
+  const propInfo = extractPropertyCodeAndLink(session.initialMessage + ' ' + userText);
+  if (propInfo.code && !session.extractedLead.codigoImovel) session.extractedLead.codigoImovel = propInfo.code;
+  if (propInfo.link && !session.extractedLead.linkImovel) session.extractedLead.linkImovel = propInfo.link;
+
   let produto = session.extractedLead.produtoImovel || '';
   let selectedLancNome = session.extractedLead.selectedLancamentoNome || '';
   let selectedLancId = session.extractedLead.selectedLancamentoId || '';
@@ -734,6 +879,13 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     if (!produto && (initMsg.includes('http') || /(apartamento|casa|cobertura|imovel|imóvel|reserva|lote)/i.test(initMsg))) {
       produto = initMsg.length > 90 ? initMsg.substring(0, 90) + '...' : initMsg;
     }
+  }
+
+  // Extract info and intent across conversation
+  session.extractedLead.informacoesColetadas = extractCollectedInfo(userText, session.extractedLead.informacoesColetadas);
+  const detectedIntent = classifyIntent(userText);
+  if (detectedIntent && !session.extractedLead.intencaoAtual) {
+    session.extractedLead.intencaoAtual = detectedIntent;
   }
 
   // 4. Detect Tipo de Atendimento & Decisão do Lead
@@ -873,11 +1025,22 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     ? session.extractedLead.trilhaNavegacao.join(' ➔ ')
     : (tipo ? `Interesse em ${tipo}` : 'Atendimento inicial');
 
+  const infoObj = session.extractedLead.informacoesColetadas || {};
+  const infoSummary = Object.entries(infoObj)
+    .filter(([_, v]) => Boolean(v))
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('; ');
+
   session.extractedLead = {
     nome: session.name !== 'Cliente' ? session.name : 'Cliente WhatsApp',
     telefone: displayPhone,
     tipoAtendimento: tipo || session.extractedLead.tipoAtendimento || '',
     produtoImovel: produto || session.extractedLead.produtoImovel || 'Imóvel sob consulta',
+    codigoImovel: session.extractedLead.codigoImovel || (propInfo.code ? propInfo.code : undefined),
+    linkImovel: session.extractedLead.linkImovel || (propInfo.link ? propInfo.link : undefined),
+    intencaoAtual: session.extractedLead.intencaoAtual || detectedIntent || undefined,
+    estadoAtendimento: session.extractedLead.estadoAtendimento || (isFullyQualified ? 'qualificado' : 'em_atendimento'),
+    informacoesColetadas: session.extractedLead.informacoesColetadas || {},
     selectedLancamentoId: selectedLancId || session.extractedLead.selectedLancamentoId,
     selectedLancamentoNome: selectedLancNome || session.extractedLead.selectedLancamentoNome,
     phoneConfirmed: session.extractedLead.phoneConfirmed || false,
@@ -891,7 +1054,7 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     status: isFullyQualified ? 'Qualificado - Aguardando corretor' : 'Em atendimento inicial',
     isComplete: isFullyQualified,
     humanRequested,
-    finalStructuredText: `NOVO LEAD\nNome: ${session.name}\nTelefone: ${displayPhone}\nTipo de atendimento: ${tipo || 'Aguardando corretor'}\nProduto ou imóvel: ${produto || 'A combinar com corretor'}\nTrilha de navegação: ${resumoNavegacao}\nObservações: ${obs || 'Nenhuma'}\nConsentimento para contato: Sim, autorizado conforme LGPD\nOrigem: WhatsApp Web Direct Houses\nStatus: Aguardando contato do corretor`,
+    finalStructuredText: `NOVO LEAD DIRECT HOUSES\nNome: ${session.name}\nTelefone: ${displayPhone}\nCódigo do Imóvel: ${session.extractedLead.codigoImovel || 'Não informado'}\nLink do Imóvel: ${session.extractedLead.linkImovel || 'Não informado'}\nIntenção Atual: ${session.extractedLead.intencaoAtual || tipo || 'Aguardando corretor'}\nInformações Coletadas: ${infoSummary || 'Nenhuma'}\nTipo de Atendimento: ${tipo || 'Aguardando corretor'}\nProduto/Imóvel: ${produto || 'A combinar com corretor'}\nTrilha de Navegação: ${resumoNavegacao}\nObservações: ${obs || 'Nenhuma'}\nConsentimento para contato: Sim, autorizado conforme LGPD\nOrigem: WhatsApp Web Direct Houses\nStatus: Aguardando contato do corretor`,
   };
 
   if (isFullyQualified && session.status === 'active') {
