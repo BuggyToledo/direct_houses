@@ -352,7 +352,17 @@ function getFallbackReply(
   const displayPhone = hasValidPhone ? formatPhoneForDisplay(session.phone) : '';
 
   // 1. If no valid phone, ALWAYS ask for phone first (Etapa 1B / Patch F)
+  // Even if user asked for human broker, we CANNOT transfer without a valid phone!
+  const isHumanReq = isExplicitCloseRequest(lowerLastMsg) || lowerLastMsg === '6';
+
   if (!hasValidPhone) {
+    if (isHumanReq) {
+      return (
+        `Com certeza${session.name !== 'Cliente' ? `, *${session.name}*` : ''}! 😊\n\n` +
+        `Para eu te transferir agora para o corretor especialista, por favor me confirma seu *WhatsApp com DDD*? ` +
+        `(ex: 21 99999-9999)`
+      );
+    }
     return (
       `Olá${session.name !== 'Cliente' ? `, *${session.name}*` : ''}! 😊\n\n` +
       `Para eu te conectar ao corretor certo, me confirma seu *WhatsApp com DDD*? ` +
@@ -360,8 +370,7 @@ function getFallbackReply(
     );
   }
 
-  // 2. Check if user requested human broker (only allowed when phone is valid)
-  const isHumanReq = isExplicitCloseRequest(lowerLastMsg) || lowerLastMsg === '6';
+  // 2. Check if user requested human broker (only reached when phone is valid!)
   if (isHumanReq) {
     session.extractedLead.humanRequested = true;
     session.extractedLead.tipoAtendimento = 'Aguardando contato do corretor';
