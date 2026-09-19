@@ -63,6 +63,7 @@ import {
   getAIViolations,
   clearAIViolations,
 } from './lancamentos-service';
+import { isDbConfigured, testConnection } from './db';
 
 dotenv.config();
 
@@ -416,6 +417,20 @@ function parseLeadFromTranscriptLocally(
 // API Routes
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', hasGeminiKey: Boolean(process.env.GEMINI_API_KEY) });
+});
+
+// Database status & health check
+app.get('/api/db/status', async (req, res) => {
+  try {
+    const configured = isDbConfigured();
+    const test = await testConnection();
+    res.json({
+      configured,
+      ...test,
+    });
+  } catch (err: any) {
+    res.status(500).json({ configured: false, success: false, error: err.message });
+  }
 });
 
 // ==========================================

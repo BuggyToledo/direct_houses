@@ -118,9 +118,27 @@ COMPANY_NAME=Direct Houses
 
 # Ambiente de execução
 NODE_ENV=production
+
+# Banco de Dados MySQL (Opcional - caso omitido, usa JSON em .data/)
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=seu_usuario_mysql
+DB_PASSWORD=sua_senha_mysql
+DB_NAME=direct_houses
 ```
 
 Salve e feche o arquivo (`Ctrl + O`, `Enter`, `Ctrl + X`).
+
+### Configurar e Migrar o Banco de Dados MySQL:
+1. Crie o banco de dados no painel DreamHost (**MySQL Databases**).
+2. Execute o schema oficial para criar as tabelas:
+   ```bash
+   mysql -u seu_usuario_mysql -p direct_houses < schema.sql
+   ```
+3. (Opcional) Migre os dados existentes das pastas JSON para o MySQL:
+   ```bash
+   npm run migrate:mysql
+   ```
 
 ---
 
