@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { isDbConfigured, query, execute, withDbOrFallback } from './db';
 
 export interface Broker {
   id: string;
@@ -56,7 +57,23 @@ const DEFAULT_CONFIG: RoletaConfig = {
   lastAssignedIndex: -1,
 };
 
-export function getBrokers(): Broker[] {
+function rowToBroker(r: any): Broker {
+  return {
+    id: r.id,
+    name: r.name,
+    phone: r.phone,
+    email: r.email || undefined,
+    active: Boolean(r.active),
+    leadsReceived: Number(r.leads_received || 0),
+    lastAssignedAt: r.last_assigned_at
+      ? (r.last_assigned_at instanceof Date ? r.last_assigned_at.toISOString() : String(r.last_assigned_at))
+      : undefined,
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+  };
+}
+
+// ---------- JSON helpers ----------
+function getBrokersFromJson(): Broker[] {
   ensureDataDir();
   try {
     if (fs.existsSync(BROKERS_FILE)) {
@@ -66,12 +83,11 @@ export function getBrokers(): Broker[] {
   } catch (err) {
     console.error('Erro ao ler arquivo de corretores:', err);
   }
-  // Initialize with default
-  saveBrokers(DEFAULT_BROKERS);
+  saveBrokersToJson(DEFAULT_BROKERS);
   return DEFAULT_BROKERS;
 }
 
-export function saveBrokers(brokers: Broker[]): void {
+function saveBrokersToJson(brokers: Broker[]): void {
   ensureDataDir();
   try {
     fs.writeFileSync(BROKERS_FILE, JSON.stringify(brokers, null, 2), 'utf-8');
@@ -80,7 +96,7 @@ export function saveBrokers(brokers: Broker[]): void {
   }
 }
 
-export function getRoletaConfig(): RoletaConfig {
+function getConfigFromJson(): RoletaConfig {
   ensureDataDir();
   try {
     if (fs.existsSync(CONFIG_FILE)) {
@@ -90,32 +106,187 @@ export function getRoletaConfig(): RoletaConfig {
   } catch (err) {
     console.error('Erro ao ler configuração da roleta:', err);
   }
-  // Initialize file directly if not found
   try {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
   } catch (e) {}
   return DEFAULT_CONFIG;
 }
 
-export function saveRoletaConfig(config: Partial<RoletaConfig>): RoletaConfig {
+function saveConfigToJson(config: RoletaConfig): void {
   ensureDataDir();
-  let current = DEFAULT_CONFIG;
   try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
-      current = { ...DEFAULT_CONFIG, ...JSON.parse(data) };
-    }
-  } catch (e) {}
-
-  const updated = { ...current, ...config };
-  try {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
   } catch (err) {
     console.error('Erro ao salvar configuração da roleta:', err);
   }
+}
+
+// ---------- API pública (async) ----------
+export async function getBrokers(): Promise<Broker[]> {
+  return withDbOrFallback(
+    async () => {
+      const rows = await query(`SELECT * FROM brokers WHERE company_id = 1 ORDER BY created_at ASC`);
+      if (rows.length === 0) {
+        // seed default
+        const def = DEFAULT_BROKERS[0];
+        await execute(
+          `INSERT INTO brokers (id, company_id, name, phone, email, active, leads_received, created_at)
+           VALUES (?, 1, ?, ?, ?, 1, 0, ?)`,
+          [def.id, def.name, def.phone, def.email || null, new Date(def.createdAt)]
+        );
+        return DEFAULT_BROKERS;
+      }
+      return rows.map(rowToBroker);
+    },
+    () => getBrokersFromJson()
+  );
+}
+
+export async function saveBrokers(brokers: Broker[]): Promise<void> {
+  await withDbOrFallback(
+    async () => {
+      for (const b of brokers) {
+        await execute(
+          `INSERT INTO brokers (id, company_id, name, phone, email, active, leads_received, last_assigned_at, created_at)
+           VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             name=VALUES(name), phone=VALUES(phone), email=VALUES(email),
+             active=VALUES(active), leads_received=VALUES(leads_received),
+             last_assigned_at=VALUES(last_assigned_at)`,
+          [
+            b.id,
+            b.name,
+            b.phone,
+            b.email || null,
+            b.active ? 1 : 0,
+            b.leadsReceived || 0,
+            b.lastAssignedAt ? new Date(b.lastAssignedAt) : null,
+            new Date(b.createdAt),
+          ]
+        );
+      }
+    },
+    () => saveBrokersToJson(brokers)
+  );
+}
+
+export async function getRoletaConfig(): Promise<RoletaConfig> {
+  return withDbOrFallback(
+    async () => {
+      const rows = await query(`SELECT * FROM roleta_config WHERE company_id = 1 LIMIT 1`);
+      if (!rows[0]) return DEFAULT_CONFIG;
+      const r = rows[0];
+      return {
+        autoDispatchEnabled: Boolean(r.auto_dispatch_enabled),
+        notifyClientWithBrokerName: Boolean(r.notify_client_with_broker_name),
+        lastAssignedIndex: Number(r.last_assigned_index ?? -1),
+      };
+    },
+    () => getConfigFromJson()
+  );
+}
+
+export async function saveRoletaConfig(config: Partial<RoletaConfig>): Promise<RoletaConfig> {
+  const current = await getRoletaConfig();
+  const updated = { ...current, ...config };
+
+  await withDbOrFallback(
+    async () => {
+      await execute(
+        `INSERT INTO roleta_config (id, company_id, auto_dispatch_enabled, notify_client_with_broker_name, last_assigned_index)
+         VALUES (1, 1, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           auto_dispatch_enabled=VALUES(auto_dispatch_enabled),
+           notify_client_with_broker_name=VALUES(notify_client_with_broker_name),
+           last_assigned_index=VALUES(last_assigned_index)`,
+        [
+          updated.autoDispatchEnabled ? 1 : 0,
+          updated.notifyClientWithBrokerName ? 1 : 0,
+          updated.lastAssignedIndex,
+        ]
+      );
+    },
+    () => saveConfigToJson(updated)
+  );
+
   return updated;
 }
 
+export async function getNextBrokerInRoleta(): Promise<Broker | null> {
+  const brokers = await getBrokers();
+  const activeBrokers = brokers.filter((b) => b.active && b.phone);
+  if (activeBrokers.length === 0) return null;
+
+  const config = await getRoletaConfig();
+  let nextIndex = (config.lastAssignedIndex + 1) % activeBrokers.length;
+  if (nextIndex < 0 || nextIndex >= activeBrokers.length) nextIndex = 0;
+
+  const chosen = { ...activeBrokers[nextIndex] };
+  chosen.leadsReceived = (chosen.leadsReceived || 0) + 1;
+  chosen.lastAssignedAt = new Date().toISOString();
+
+  const full = brokers.map((b) => (b.id === chosen.id ? chosen : b));
+  await saveBrokers(full);
+  await saveRoletaConfig({ lastAssignedIndex: nextIndex });
+
+  return chosen;
+}
+
+export async function addBroker(brokerData: Omit<Broker, 'id' | 'createdAt' | 'leadsReceived'>): Promise<Broker> {
+  const brokers = await getBrokers();
+  const newBroker: Broker = {
+    id: `broker-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    name: brokerData.name.trim(),
+    phone: cleanPhoneNumber(brokerData.phone),
+    email: brokerData.email?.trim() || '',
+    active: typeof brokerData.active === 'boolean' ? brokerData.active : true,
+    leadsReceived: 0,
+    createdAt: new Date().toISOString(),
+  };
+
+  brokers.push(newBroker);
+  await saveBrokers(brokers);
+  return newBroker;
+}
+
+export async function updateBroker(id: string, updates: Partial<Broker>): Promise<Broker | null> {
+  const brokers = await getBrokers();
+  const index = brokers.findIndex((b) => b.id === id);
+  if (index === -1) return null;
+
+  const current = brokers[index];
+  const updated: Broker = {
+    ...current,
+    ...updates,
+    phone: updates.phone ? cleanPhoneNumber(updates.phone) : current.phone,
+    name: updates.name ? updates.name.trim() : current.name,
+  };
+
+  brokers[index] = updated;
+  await saveBrokers(brokers);
+  return updated;
+}
+
+export async function deleteBroker(id: string): Promise<boolean> {
+  await withDbOrFallback(
+    async () => {
+      await execute(`DELETE FROM brokers WHERE id = ? AND company_id = 1`, [id]);
+    },
+    () => {
+      const brokers = getBrokersFromJson();
+      const filtered = brokers.filter((b) => String(b.id).trim() !== String(id).trim());
+      saveBrokersToJson(filtered);
+    }
+  );
+  // Also keep local JSON in sync
+  const localBrokers = getBrokersFromJson();
+  const filtered = localBrokers.filter((b) => String(b.id).trim() !== String(id).trim());
+  saveBrokersToJson(filtered);
+
+  return true;
+}
+
+// ---------- Phone & Format helpers ----------
 export function isValidPhoneNumber(phone: string): boolean {
   if (!phone) return false;
   const digits = phone.replace(/\D/g, '');
@@ -198,84 +369,6 @@ export function formatPhoneForDisplay(phone: string): string {
   }
 
   return `+${clean}`;
-}
-
-export function addBroker(brokerData: Omit<Broker, 'id' | 'createdAt' | 'leadsReceived'>): Broker {
-  const brokers = getBrokers();
-  const newBroker: Broker = {
-    id: `broker-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-    name: brokerData.name.trim(),
-    phone: cleanPhoneNumber(brokerData.phone),
-    email: brokerData.email?.trim() || '',
-    active: typeof brokerData.active === 'boolean' ? brokerData.active : true,
-    leadsReceived: 0,
-    createdAt: new Date().toISOString(),
-  };
-
-  brokers.push(newBroker);
-  saveBrokers(brokers);
-  return newBroker;
-}
-
-export function updateBroker(id: string, updates: Partial<Broker>): Broker | null {
-  const brokers = getBrokers();
-  const index = brokers.findIndex((b) => b.id === id);
-  if (index === -1) return null;
-
-  const current = brokers[index];
-  const updated: Broker = {
-    ...current,
-    ...updates,
-    phone: updates.phone ? cleanPhoneNumber(updates.phone) : current.phone,
-    name: updates.name ? updates.name.trim() : current.name,
-  };
-
-  brokers[index] = updated;
-  saveBrokers(brokers);
-  return updated;
-}
-
-export function deleteBroker(id: string): boolean {
-  const brokers = getBrokers();
-  const filtered = brokers.filter((b) => String(b.id).trim() !== String(id).trim());
-  saveBrokers(filtered);
-  return true;
-}
-
-/**
- * Round-Robin Selection of next active broker in the Roleta
- */
-export function getNextBrokerInRoleta(): Broker | null {
-  const brokers = getBrokers();
-  const activeBrokers = brokers.filter((b) => b.active && b.phone);
-
-  if (activeBrokers.length === 0) {
-    return null;
-  }
-
-  const config = getRoletaConfig();
-  let nextIndex = (config.lastAssignedIndex + 1) % activeBrokers.length;
-  if (nextIndex < 0 || nextIndex >= activeBrokers.length) {
-    nextIndex = 0;
-  }
-
-  const chosenBroker = activeBrokers[nextIndex];
-
-  // Update chosen broker metrics
-  chosenBroker.leadsReceived = (chosenBroker.leadsReceived || 0) + 1;
-  chosenBroker.lastAssignedAt = new Date().toISOString();
-
-  // Save updated list
-  const fullIndex = brokers.findIndex((b) => b.id === chosenBroker.id);
-  if (fullIndex !== -1) {
-    brokers[fullIndex] = chosenBroker;
-    saveBrokers(brokers);
-  }
-
-  // Update Roleta index
-  saveRoletaConfig({ lastAssignedIndex: nextIndex });
-
-  return chosenBroker;
 }
 
 /**

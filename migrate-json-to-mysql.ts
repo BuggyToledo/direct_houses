@@ -102,8 +102,8 @@ async function runMigration() {
             previsao_entrega, descricao, fotos, localidade, vizinhanca,
             fotos_upload, book_pdf_upload, construtora, telefone_construtora,
             email_construtora, contato_terceiro, endereco_completo, dados_cadastrais,
-            link_book_pdf, documento_origem_nome, notas_internas, publicavel, versoes
-          ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            link_book_pdf, documento_origem_nome, notas_internas, publicavel, versao_atual, versoes
+          ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
             status = VALUES(status),
             nome = VALUES(nome),
@@ -113,6 +113,7 @@ async function runMigration() {
             preco_a_partir_de = VALUES(preco_a_partir_de),
             diferenciais = VALUES(diferenciais),
             publicavel = VALUES(publicavel),
+            versao_atual = VALUES(versao_atual),
             versoes = VALUES(versoes)
         `, [
           l.id,
@@ -146,6 +147,7 @@ async function runMigration() {
           l.documentoOrigemNome || null,
           l.notasInternas || null,
           JSON.stringify(l.publicavel || {}),
+          l.versaoAtual || 1,
           l.historicoVersoes ? JSON.stringify(l.historicoVersoes) : null,
         ]);
       }
@@ -282,23 +284,26 @@ async function runMigration() {
       for (const v of violations) {
         await connection.execute(`
           INSERT INTO ai_violations (
-            id, company_id, timestamp, jid, lead_nome,
-            tipo_violacao, categoria, trecho_bloqueado,
-            severidade, acao_tomada, prompt_usuario
-          ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, company_id, lead_id, whatsapp_jid, company_name,
+            original_user_message, raw_ai_response, sanitized_response,
+            violation_types, blocked_type, was_modified, model_used, created_at
+          ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
-            acao_tomada = VALUES(acao_tomada)
+            sanitized_response = VALUES(sanitized_response),
+            was_modified = VALUES(was_modified)
         `, [
           v.id,
-          v.timestamp ? new Date(v.timestamp) : new Date(),
-          v.jid || null,
-          v.leadNome || null,
-          v.tipoViolacao || 'bloqueio_dlp',
-          v.categoria || 'geral',
-          v.trechoBloqueado || '',
-          v.severidade || 'alta',
-          v.acaoTomada || 'bloqueado_e_substituido',
-          v.promptUsuario || null,
+          v.leadId || null,
+          v.whatsappJid || v.jid || null,
+          v.companyName || 'Direct Houses',
+          v.originalUserMessage || v.promptUsuario || null,
+          v.rawAiResponse || null,
+          v.sanitizedResponse || null,
+          JSON.stringify(v.violationTypes || (v.tipoViolacao ? [v.tipoViolacao] : [])),
+          v.blockedType || v.categoria || 'bloqueio_dlp',
+          v.wasModified !== false ? 1 : 0,
+          v.modelUsed || null,
+          v.createdAt ? new Date(v.createdAt) : (v.timestamp ? new Date(v.timestamp) : new Date()),
         ]);
       }
       console.log(`✅ ${violations.length} logs de auditoria DLP migrados.`);

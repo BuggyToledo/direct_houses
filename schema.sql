@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS `lancamentos` (
   
   -- Nível 1: Diretório / Canal Público Oficial
   `url_publica_direct_house` VARCHAR(255) NULL,
-  `conteudo_publico_autorizado TEXT` NULL,
+  `conteudo_publico_autorizado` TEXT NULL,
   
   -- Nível 2: Dados Comerciais Aprovados para Divulgação
   `nome` VARCHAR(150) NOT NULL,
@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS `lancamentos` (
   
   -- Governança e Auditoria
   `publicavel` JSON NOT NULL,
+  `versao_atual` INT UNSIGNED NOT NULL DEFAULT 1,
   `versoes` JSON NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -142,7 +143,7 @@ CREATE TABLE IF NOT EXISTS `whatsapp_sessions` (
   `phone` VARCHAR(40) NOT NULL,
   `name` VARCHAR(150) NULL,
   `initial_message` TEXT NULL,
-  `messages` JSON NOT NULL,
+  `messages` JSON NULL,
   `extracted_lead` JSON NULL,
   `assigned_broker` JSON NULL,
   `status` VARCHAR(30) NOT NULL DEFAULT 'active',
@@ -186,17 +187,20 @@ CREATE TABLE IF NOT EXISTS `roleta_distributions` (
 CREATE TABLE IF NOT EXISTS `ai_violations` (
   `id` VARCHAR(64) PRIMARY KEY,
   `company_id` INT UNSIGNED NOT NULL DEFAULT 1,
-  `timestamp` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  `jid` VARCHAR(100) NULL,
-  `lead_nome` VARCHAR(150) NULL,
-  `tipo_violacao` VARCHAR(60) NOT NULL,
-  `categoria` VARCHAR(60) NOT NULL,
-  `trecho_bloqueado` TEXT NOT NULL,
-  `severidade` VARCHAR(30) NOT NULL DEFAULT 'alta',
-  `acao_tomada` VARCHAR(80) NOT NULL DEFAULT 'bloqueado_e_substituido',
-  `prompt_usuario` TEXT NULL,
-  INDEX `idx_violations_company_time` (`company_id`, `timestamp`),
-  INDEX `idx_violations_jid` (`jid`),
+  `lead_id` VARCHAR(64) NULL,
+  `whatsapp_jid` VARCHAR(100) NULL,
+  `company_name` VARCHAR(150) NULL,
+  `original_user_message` TEXT NULL,
+  `raw_ai_response` TEXT NULL,
+  `sanitized_response` TEXT NULL,
+  `violation_types` JSON NOT NULL,
+  `blocked_type` VARCHAR(60) NOT NULL,
+  `was_modified` TINYINT(1) NOT NULL DEFAULT 1,
+  `model_used` VARCHAR(100) NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX `idx_violations_company_time` (`company_id`, `created_at`),
+  INDEX `idx_violations_jid` (`whatsapp_jid`),
+  INDEX `idx_violations_lead` (`lead_id`),
   CONSTRAINT `fk_violations_company` FOREIGN KEY (`company_id`) REFERENCES `companies` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

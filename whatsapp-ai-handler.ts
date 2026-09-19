@@ -645,7 +645,7 @@ function getFallbackReply(
 }
 
 // Structured lead extractor based on conversation state
-function extractLeadFromSession(session: WhatsAppChatSession) {
+async function extractLeadFromSession(session: WhatsAppChatSession) {
   const userMessages = session.messages.filter((m) => m.role === 'user');
   const userText = userMessages.map((m) => m.content).join(' ');
   const activeLanc = getActiveLancamentos();
@@ -865,7 +865,7 @@ function extractLeadFromSession(session: WhatsAppChatSession) {
   const canRecordLead = hasRealPhone && (isFullyQualified || (hasRealName && (userMessages.length >= 3 || session.extractedLead.tipoAtendimento)));
 
   if (canRecordLead) {
-    recordLead({
+    await recordLead({
       id: `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`,
       nome: session.extractedLead.nome,
       telefone: session.extractedLead.telefone,
@@ -940,7 +940,7 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
   session.lastActivity = new Date().toISOString();
 
   // Extract structured lead data before generating response so state is updated
-  extractLeadFromSession(session);
+  await extractLeadFromSession(session);
   scheduleSessionsPersist();
 
   // Generate AI reply with candidate models fallback
@@ -1069,10 +1069,10 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
   await whatsAppService.sendTextMessage(jid, replyText);
 
   // Re-extract structured lead data with updated assistant response
-  extractLeadFromSession(session);
+  await extractLeadFromSession(session);
 
   // Check if lead was qualified/finished and if Auto Roleta is enabled
-  const roletaConfig = getRoletaConfig();
+  const roletaConfig = await getRoletaConfig();
   if (session.extractedLead.isComplete && session.status !== 'dispatched' && roletaConfig.autoDispatchEnabled) {
     await dispatchSessionLeadToRoleta(session, companyName);
   }
@@ -1085,7 +1085,7 @@ export async function dispatchSessionLeadToRoleta(
   session: WhatsAppChatSession,
   companyName: string = 'Direct Houses'
 ): Promise<{ success: boolean; message: string; broker?: any }> {
-  const chosenBroker = getNextBrokerInRoleta();
+  const chosenBroker = await getNextBrokerInRoleta();
 
   if (!chosenBroker) {
     return {
@@ -1108,7 +1108,7 @@ export async function dispatchSessionLeadToRoleta(
     };
 
     // 2. Optionally notify customer on WhatsApp with the broker's name
-    const roletaConfig = getRoletaConfig();
+    const roletaConfig = await getRoletaConfig();
     if (roletaConfig.notifyClientWithBrokerName) {
       const clientNotice = formatClientAssignedMessage(chosenBroker.name, companyName);
       await whatsAppService.sendTextMessage(session.jid, clientNotice);
@@ -1126,7 +1126,7 @@ export async function dispatchSessionLeadToRoleta(
     const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
 
     // Record in Roleta Distribution History
-    recordDistributionLog({
+    await recordDistributionLog({
       leadId,
       leadNome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
       leadTelefone: session.extractedLead.telefone || session.phone,
@@ -1140,7 +1140,7 @@ export async function dispatchSessionLeadToRoleta(
     });
 
     // Update persistent lead
-    recordLead({
+    await recordLead({
       id: leadId,
       nome: session.extractedLead.nome,
       telefone: session.extractedLead.telefone || session.phone,
@@ -1193,7 +1193,7 @@ export async function dispatchSessionLeadToSpecificBroker(
     return { success: false, message: 'Sessão de atendimento não encontrada.' };
   }
 
-  const brokers = getBrokers();
+  const brokers = await getBrokers();
   const chosenBroker = brokers.find((b) => b.id === brokerId);
   if (!chosenBroker) {
     return { success: false, message: 'Corretor não encontrado.' };
@@ -1220,7 +1220,7 @@ export async function dispatchSessionLeadToSpecificBroker(
     const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
 
     // Record in Roleta Distribution History
-    recordDistributionLog({
+    await recordDistributionLog({
       leadId,
       leadNome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
       leadTelefone: session.extractedLead.telefone || session.phone,
@@ -1234,7 +1234,7 @@ export async function dispatchSessionLeadToSpecificBroker(
     });
 
     // Update persistent lead
-    recordLead({
+    await recordLead({
       id: leadId,
       nome: session.extractedLead.nome,
       telefone: session.extractedLead.telefone || session.phone,
@@ -1291,7 +1291,7 @@ const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 async function checkInactiveSessions() {
   const now = Date.now();
   const companyName = process.env.COMPANY_NAME || 'Direct Houses';
-  const roletaConfig = getRoletaConfig();
+  const roletaConfig = await getRoletaConfig();
 
   if (!roletaConfig.autoDispatchEnabled) return;
 
@@ -1303,8 +1303,8 @@ async function checkInactiveSessions() {
           `⏱️ [Inatividade] Sessão de ${session.name} (${session.phone}) inativa há mais de 5 min. Despachando na Roleta para não perder o lead...`
         );
 
-        extractLeadFromSession(session);
-        const chosenBroker = getNextBrokerInRoleta();
+        await extractLeadFromSession(session);
+        const chosenBroker = await getNextBrokerInRoleta();
 
         if (chosenBroker) {
           const brokerMsg = formatBrokerLeadMessage(
@@ -1334,7 +1334,7 @@ async function checkInactiveSessions() {
 
           const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
 
-          recordDistributionLog({
+          await recordDistributionLog({
             leadId,
             leadNome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
             leadTelefone: session.extractedLead.telefone || session.phone,
@@ -1348,7 +1348,7 @@ async function checkInactiveSessions() {
           });
 
           // Update persistent lead
-          recordLead({
+          await recordLead({
             id: leadId,
             nome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
             telefone: session.extractedLead.telefone || session.phone,

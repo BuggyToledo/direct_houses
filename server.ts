@@ -1005,9 +1005,9 @@ app.post('/api/whatsapp/chats/:jid/dispatch', async (req, res) => {
 // ==========================================
 
 // Get all persistent leads with optional filters
-app.get('/api/leads', (req, res) => {
+app.get('/api/leads', async (req, res) => {
   try {
-    let leads = getPersistentLeads();
+    let leads = await getPersistentLeads();
     const { search, status, temperatura, brokerId } = req.query as Record<string, string>;
 
     if (search && search.trim()) {
@@ -1041,18 +1041,18 @@ app.get('/api/leads', (req, res) => {
 });
 
 // Get Leads Metrics
-app.get('/api/leads/metrics', (req, res) => {
+app.get('/api/leads/metrics', async (req, res) => {
   try {
-    res.json(getLeadsMetrics());
+    res.json(await getLeadsMetrics());
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // Export Leads in CSV format (UTF-8 with BOM for Excel)
-app.get('/api/leads/export/csv', (req, res) => {
+app.get('/api/leads/export/csv', async (req, res) => {
   try {
-    const leads = getPersistentLeads();
+    const leads = await getPersistentLeads();
     const header = [
       'ID',
       'Data de Criação',
@@ -1103,9 +1103,9 @@ app.get('/api/leads/export/csv', (req, res) => {
 });
 
 // Save or create new lead
-app.post('/api/leads', (req, res) => {
+app.post('/api/leads', async (req, res) => {
   try {
-    const lead = recordLead(req.body || {});
+    const lead = await recordLead(req.body || {});
     res.json(lead);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1113,9 +1113,9 @@ app.post('/api/leads', (req, res) => {
 });
 
 // Update lead details
-app.put('/api/leads/:id', (req, res) => {
+app.put('/api/leads/:id', async (req, res) => {
   try {
-    const updated = updateLead(req.params.id, req.body || {});
+    const updated = await updateLead(req.params.id, req.body || {});
     if (!updated) {
       return res.status(404).json({ error: 'Lead não encontrado.' });
     }
@@ -1126,13 +1126,13 @@ app.put('/api/leads/:id', (req, res) => {
 });
 
 // Quick update of lead stage/status (Kanban drag or stage select)
-app.patch('/api/leads/:id/stage', (req, res) => {
+app.patch('/api/leads/:id/stage', async (req, res) => {
   try {
     const { stage } = req.body || {};
     if (!stage) {
       return res.status(400).json({ error: 'Etapa é obrigatória.' });
     }
-    const updated = updateLeadStage(req.params.id, stage);
+    const updated = await updateLeadStage(req.params.id, stage);
     if (!updated) {
       return res.status(404).json({ error: 'Lead não encontrado.' });
     }
@@ -1143,13 +1143,13 @@ app.patch('/api/leads/:id/stage', (req, res) => {
 });
 
 // Add internal note to a lead
-app.post('/api/leads/:id/notes', (req, res) => {
+app.post('/api/leads/:id/notes', async (req, res) => {
   try {
     const { texto, autor } = req.body || {};
     if (!texto || !texto.trim()) {
       return res.status(400).json({ error: 'Texto da nota é obrigatório.' });
     }
-    const updated = addLeadNote(req.params.id, { texto, autor: autor || 'Equipe Comercial' });
+    const updated = await addLeadNote(req.params.id, { texto, autor: autor || 'Equipe Comercial' });
     if (!updated) {
       return res.status(404).json({ error: 'Lead não encontrado.' });
     }
@@ -1166,7 +1166,7 @@ app.post('/api/leads/:id/redistribute', async (req, res) => {
     const { brokerId, motivo, companyName } = req.body || {};
     const company = companyName || DEFAULT_COMPANY;
 
-    const leads = getPersistentLeads();
+    const leads = await getPersistentLeads();
     const lead = leads.find((l) => l.id === id);
     if (!lead) {
       return res.status(404).json({ success: false, message: 'Lead não encontrado.' });
@@ -1174,10 +1174,10 @@ app.post('/api/leads/:id/redistribute', async (req, res) => {
 
     let broker: any = null;
     if (brokerId) {
-      const brokers = getBrokers();
+      const brokers = await getBrokers();
       broker = brokers.find((b) => b.id === brokerId);
     } else {
-      broker = getNextBrokerInRoleta();
+      broker = await getNextBrokerInRoleta();
     }
 
     if (!broker) {
@@ -1211,7 +1211,7 @@ app.post('/api/leads/:id/redistribute', async (req, res) => {
     }
 
     // Record in Roleta Distribution History
-    const distLog = recordDistributionLog({
+    const distLog = await recordDistributionLog({
       leadId: lead.id,
       leadNome: lead.nome,
       leadTelefone: lead.telefone,
@@ -1225,7 +1225,7 @@ app.post('/api/leads/:id/redistribute', async (req, res) => {
     });
 
     // Update lead with distribution record
-    const updatedLead = addLeadDistribution(lead.id, {
+    const updatedLead = await addLeadDistribution(lead.id, {
       brokerId: broker.id,
       brokerName: broker.name,
       brokerPhone: broker.phone,
@@ -1251,9 +1251,9 @@ app.post('/api/leads/:id/redistribute', async (req, res) => {
 });
 
 // Delete specific lead
-app.delete('/api/leads/:id', (req, res) => {
+app.delete('/api/leads/:id', async (req, res) => {
   try {
-    const success = deletePersistentLead(req.params.id);
+    const success = await deletePersistentLead(req.params.id);
     res.json({ success });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1261,9 +1261,9 @@ app.delete('/api/leads/:id', (req, res) => {
 });
 
 // Clear all leads
-app.delete('/api/leads', (req, res) => {
+app.delete('/api/leads', async (req, res) => {
   try {
-    const success = clearAllPersistentLeads();
+    const success = await clearAllPersistentLeads();
     res.json({ success });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1275,9 +1275,9 @@ app.delete('/api/leads', (req, res) => {
 // ==========================================
 
 // Get Roleta distribution history
-app.get('/api/roleta/history', (req, res) => {
+app.get('/api/roleta/history', async (req, res) => {
   try {
-    let history = getRoletaDistributionHistory();
+    let history = await getRoletaDistributionHistory();
     const { brokerId, search, statusEnvio } = req.query as Record<string, string>;
 
     if (brokerId && brokerId !== 'all') {
@@ -1298,9 +1298,11 @@ app.get('/api/roleta/history', (req, res) => {
       );
     }
 
+    const stats = await getRoletaDistributionStats();
+
     res.json({
       history,
-      stats: getRoletaDistributionStats(),
+      stats,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1308,18 +1310,19 @@ app.get('/api/roleta/history', (req, res) => {
 });
 
 // Get Roleta distribution stats
-app.get('/api/roleta/history/stats', (req, res) => {
+app.get('/api/roleta/history/stats', async (req, res) => {
   try {
-    res.json(getRoletaDistributionStats());
+    const stats = await getRoletaDistributionStats();
+    res.json(stats);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // Clear Roleta distribution history (Admin)
-app.delete('/api/roleta/history', (req, res) => {
+app.delete('/api/roleta/history', async (req, res) => {
   try {
-    const success = clearRoletaDistributionHistory();
+    const success = await clearRoletaDistributionHistory();
     res.json({ success, message: 'Histórico da roleta reiniciado com sucesso.' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1327,9 +1330,9 @@ app.delete('/api/roleta/history', (req, res) => {
 });
 
 // Export Roleta distribution history to CSV
-app.get('/api/roleta/history/export/csv', (req, res) => {
+app.get('/api/roleta/history/export/csv', async (req, res) => {
   try {
-    const history = getRoletaDistributionHistory();
+    const history = await getRoletaDistributionHistory();
     const header = [
       'ID Distribuição',
       'Data e Hora',
@@ -1554,18 +1557,18 @@ app.post('/api/upload', async (req, res) => {
 // ==========================================
 
 // Get all brokers
-app.get('/api/brokers', (req, res) => {
-  res.json(getBrokers());
+app.get('/api/brokers', async (req, res) => {
+  res.json(await getBrokers());
 });
 
 // Add new broker
-app.post('/api/brokers', (req, res) => {
+app.post('/api/brokers', async (req, res) => {
   try {
     const { name, phone, email, active } = req.body || {};
     if (!name || !phone) {
       return res.status(400).json({ error: 'Nome e telefone são obrigatórios.' });
     }
-    const broker = addBroker({ name, phone, email, active });
+    const broker = await addBroker({ name, phone, email, active });
     res.json(broker);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1573,10 +1576,10 @@ app.post('/api/brokers', (req, res) => {
 });
 
 // Update existing broker
-app.put('/api/brokers/:id', (req, res) => {
+app.put('/api/brokers/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const updated = updateBroker(id, req.body || {});
+    const updated = await updateBroker(id, req.body || {});
     if (!updated) {
       return res.status(404).json({ error: 'Corretor não encontrado.' });
     }
@@ -1587,25 +1590,25 @@ app.put('/api/brokers/:id', (req, res) => {
 });
 
 // Delete broker
-app.delete('/api/brokers/:id', (req, res) => {
+app.delete('/api/brokers/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    deleteBroker(id);
-    res.json({ success: true, brokers: getBrokers(), message: 'Corretor removido com sucesso.' });
+    await deleteBroker(id);
+    res.json({ success: true, brokers: await getBrokers(), message: 'Corretor removido com sucesso.' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // Get Roleta configuration
-app.get('/api/roleta/config', (req, res) => {
-  res.json(getRoletaConfig());
+app.get('/api/roleta/config', async (req, res) => {
+  res.json(await getRoletaConfig());
 });
 
 // Update Roleta configuration
-app.post('/api/roleta/config', (req, res) => {
+app.post('/api/roleta/config', async (req, res) => {
   try {
-    const updated = saveRoletaConfig(req.body || {});
+    const updated = await saveRoletaConfig(req.body || {});
     res.json(updated);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1624,10 +1627,10 @@ app.post('/api/roleta/dispatch-lead', async (req, res) => {
 
     let broker: any = null;
     if (brokerId) {
-      const brokers = getBrokers();
+      const brokers = await getBrokers();
       broker = brokers.find((b) => b.id === brokerId);
     } else {
-      broker = getNextBrokerInRoleta();
+      broker = await getNextBrokerInRoleta();
     }
 
     if (!broker) {
@@ -1652,7 +1655,7 @@ app.post('/api/roleta/dispatch-lead', async (req, res) => {
     }
 
     // Record distribution log in history
-    const distLog = recordDistributionLog({
+    const distLog = await recordDistributionLog({
       leadId: lead.id || `lead-${Date.now()}`,
       leadNome: lead.nome || 'Cliente',
       leadTelefone: lead.telefone || '',
@@ -1667,7 +1670,7 @@ app.post('/api/roleta/dispatch-lead', async (req, res) => {
 
     // If lead exists in persistent leads, update it with broker assignment
     if (lead.id) {
-      addLeadDistribution(lead.id, {
+      await addLeadDistribution(lead.id, {
         brokerId: broker.id,
         brokerName: broker.name,
         brokerPhone: broker.phone,
@@ -1710,10 +1713,10 @@ app.post('/api/roleta/test-dispatch', async (req, res) => {
     let broker: any = null;
 
     if (brokerId) {
-      const brokers = getBrokers();
+      const brokers = await getBrokers();
       broker = brokers.find((b) => b.id === brokerId);
     } else {
-      broker = getNextBrokerInRoleta();
+      broker = await getNextBrokerInRoleta();
     }
 
     if (!broker) {
@@ -1730,7 +1733,7 @@ app.post('/api/roleta/test-dispatch', async (req, res) => {
     }
 
     // Log test distribution
-    recordDistributionLog({
+    await recordDistributionLog({
       leadId: `test-lead-${Date.now()}`,
       leadNome: testLead.nome,
       leadTelefone: testLead.telefone,
