@@ -151,14 +151,15 @@ Lembre-se:
 - Mantenha tom profissional, caloroso e conciso.`;
 }
 
-// Candidate models in order of resilience and speed.
-// Using standard supported aliases from gemini-api skill:
-// 'gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'
+// Prefer currently listed Gemini Flash endpoints (docs 2026-09). Keep legacy 2.5 last —
+// some accounts get 404 on gemini-2.5-flash when access is limited to prior users.
 const CANDIDATE_MODELS = [
-  'gemini-2.5-flash',
-  'gemini-3.1-flash-lite',
   'gemini-3.8-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
   'gemini-flash-latest',
+  'gemini-2.5-flash',
 ];
 
 async function generateWithFallback(
