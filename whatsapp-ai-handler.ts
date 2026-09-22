@@ -19,6 +19,7 @@ import {
   formatLancamentosForPrompt,
   getActiveLancamentos,
   sanitizeAndAuditAIResponse,
+  Lancamento,
 } from './lancamentos-service';
 
 export interface WhatsAppChatSession {
@@ -52,6 +53,8 @@ export interface WhatsAppChatSession {
     selectedLancamentoNome?: string;
     /** True after option 2 has sent the registered lançamentos list (do not dispatch before this). */
     lancamentosListed?: boolean;
+    /** Set for one turn so the media sender fires only for an explicit submenu action. */
+    pendingMedia?: 'fotos' | 'book';
     /** Confirmed only after explicit SIM / correction step (B) */
     nameConfirmed?: boolean;
     phoneConfirmed?: boolean;
@@ -645,18 +648,32 @@ function shouldUseDialogStateMachine(session: WhatsAppChatSession, messageText: 
   return (
     estado === 'menu_inicial' ||
     estado === 'lancamentos_apresentados' ||
+    estado === 'lancamento_selecionado' ||
     estado === 'coletando_lancamento' ||
     estado === 'coletando_prontos' ||
     estado === 'respondendo_duvida'
   );
 }
 
+function isLaunchBrowseState(estado?: string): boolean {
+  return estado === 'lancamentos_apresentados' || estado === 'lancamento_selecionado';
+}
+
 /** Dispatch is not allowed on the turn that only opens a menu option or is still collecting. */
 function isPrematureDispatchTurn(session: WhatsAppChatSession, lastUserText: string): boolean {
   const choice = normalizeMenuChoice(lastUserText);
-  if (choice === '2' || choice === '3' || choice === '4') return true;
   const estado = session.extractedLead.estadoAtendimento || '';
-  if (estado === 'lancamentos_apresentados' || estado === 'coletando_lancamento' || estado === 'coletando_prontos') {
+  // Submenu 4 becomes the consultor handoff only after the state machine leaves the launch picker.
+  if (choice === '4' && (estado === 'aguardando_corretor' || estado === 'atendimento_humano')) {
+    return false;
+  }
+  if (choice === '2' || choice === '3' || choice === '4') return true;
+  if (
+    estado === 'lancamentos_apresentados' ||
+    estado === 'lancamento_selecionado' ||
+    estado === 'coletando_lancamento' ||
+    estado === 'coletando_prontos'
+  ) {
     return true;
   }
   if (estado === 'respondendo_duvida' && !session.extractedLead.informacoesColetadas?.duvidaTexto) {
@@ -686,8 +703,233 @@ function buildLancamentosListingMessage(companyName: string): string {
   return (
     `Estes são os lançamentos na planta cadastrados na *${companyName}*:\n\n` +
     `${cards.join('\n\n')}\n\n` +
-    `Se quiser filtrar, me diga se é para *morar*, *investir* ou se ainda está *avaliando* — ou o número do empreendimento.`
+    `Responda com o *número* ou o *nome* do empreendimento.`
   );
+}
+
+const LISTED_LAUNCH_LIMIT = 8;
+
+function listedLaunches(): Lancamento[] {
+  return getActiveLancamentos().slice(0, LISTED_LAUNCH_LIMIT);
+}
+
+function looseText(value: string): string {
+  return (value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Position in the current list (1-based), not the main menu. */
+export function matchLaunchByNumber(text: string, items: Array<{ id: string; nome: string }>): { id: string; nome: string } | null {
+  const t = (text || '').trim().replace(/\uFE0F|\u20E3/g, '');
+  if (!/^\d{1,2}$/.test(t)) return null;
+  const n = Number(t);
+  if (n < 1 || n > items.length) return null;
+  const item = items[n - 1];
+  return item ? { id: item.id, nome: item.nome } : null;
+}
+
+/** Name match against the listed cards. Exact, then starts-with, then contains. */
+export function matchLaunchByName(text: string, items: Array<{ id: string; nome: string }>): { id: string; nome: string } | null {
+  const q = looseText(text);
+  if (q.length < 3) return null;
+  if (/^(fotos?|book|pdf|consultor|corretor|mais informacoes|informacoes|detalhes)$/.test(q)) return null;
+  const exact = items.find((item) => looseText(item.nome) === q);
+  if (exact) return { id: exact.id, nome: exact.nome };
+  const starts = items.filter((item) => looseText(item.nome).startsWith(q) || q.startsWith(looseText(item.nome)));
+  if (starts.length === 1) return { id: starts[0].id, nome: starts[0].nome };
+  const contains = items.filter((item) => {
+    const name = looseText(item.nome);
+    return name.includes(q) || q.includes(name);
+  });
+  if (contains.length === 1) return { id: contains[0].id, nome: contains[0].nome };
+  return null;
+}
+
+type LaunchSubmenuAction = 'fotos' | 'info' | 'book' | 'consultor';
+
+export function parseLaunchSubmenuAction(text: string): LaunchSubmenuAction | null {
+  const t = looseText(text).replace(/\uFE0F|\u20E3/g, '');
+  if (t === '1' || /^(fotos?|imagens?|galeria|perspectivas?)$/.test(t) || /\bfotos?\b/.test(t)) return 'fotos';
+  if (t === '2' || /^(mais informacoes|informacoes|detalhes|info)$/.test(t) || /mais inform/.test(t)) return 'info';
+  if (t === '3' || /^(book|pdf|book pdf|apresentacao)$/.test(t) || /\bbook\b/.test(t) || /\bpdf\b/.test(t)) return 'book';
+  if (
+    t === '4' ||
+    /^(consultor|corretor|falar com consultor|falar com o consultor)$/.test(t) ||
+    /falar com (o )?(consultor|corretor)|quero (o )?(consultor|corretor)|chamar (o )?(consultor|corretor)/.test(t)
+  ) {
+    return 'consultor';
+  }
+  return null;
+}
+
+function buildLaunchSubmenu(lanc: Lancamento): string {
+  return (
+    `*${lanc.nome}*\n` +
+    (lanc.bairro ? `📍 ${lanc.bairro}${lanc.cidade ? ` (${lanc.cidade})` : ''}\n` : '') +
+    `\nO que você quer ver?\n\n` +
+    `1️⃣ Fotos\n` +
+    `2️⃣ Mais informações\n` +
+    `3️⃣ Book PDF\n` +
+    `4️⃣ Falar com consultor\n\n` +
+    `Responda 1, 2, 3 ou 4.`
+  );
+}
+
+function selectLaunch(session: WhatsAppChatSession, lanc: Lancamento): void {
+  session.extractedLead.selectedLancamentoId = lanc.id;
+  session.extractedLead.selectedLancamentoNome = lanc.nome;
+  session.extractedLead.produtoImovel = `Lançamento ${lanc.nome}${lanc.tipologias ? ` (${lanc.tipologias})` : ''}`;
+  session.extractedLead.intencaoAtual = 'lancamentos_na_planta';
+  session.extractedLead.tipoAtendimento = 'Lançamento na Planta';
+  session.extractedLead.estadoAtendimento = 'lancamento_selecionado';
+  session.extractedLead.isComplete = false;
+  session.extractedLead.humanRequested = false;
+  session.extractedLead.pendingMedia = undefined;
+  const tag = `Empreendimento: ${lanc.nome}`;
+  if (!session.extractedLead.trilhaNavegacao.includes(tag)) {
+    session.extractedLead.trilhaNavegacao.push(tag);
+  }
+}
+
+function photoLinksFromCatalog(lanc: Lancamento): string[] {
+  return (lanc.fotos || '')
+    .split(/[,\n]/)
+    .map((part) => part.trim())
+    .filter((part) => /^https?:\/\//i.test(part));
+}
+
+function buildLaunchDetails(lanc: Lancamento): string {
+  const lines = [
+    `*${lanc.nome}*`,
+    lanc.bairro ? `📍 ${lanc.bairro}${lanc.cidade ? ` — ${lanc.cidade}` : ''}` : '',
+    lanc.tipologias ? `🏠 ${lanc.tipologias}` : '',
+    lanc.quartos ? `🛏 ${lanc.quartos}` : '',
+    lanc.metragens ? `📐 ${lanc.metragens}` : '',
+    lanc.precoAPartirDe ? `💰 A partir de ${lanc.precoAPartirDe}` : '',
+    lanc.diferenciais ? `✨ ${lanc.diferenciais}` : '',
+    lanc.previsaoEntrega ? `📅 Entrega: ${lanc.previsaoEntrega}` : '',
+    lanc.descricao ? `\n${lanc.descricao}` : '',
+    lanc.urlPublicaDirectHouse ? `\n🔗 ${lanc.urlPublicaDirectHouse}` : '',
+  ].filter(Boolean);
+  return (
+    lines.join('\n') +
+    `\n\n1️⃣ Fotos · 2️⃣ Mais informações · 3️⃣ Book PDF · 4️⃣ Consultor`
+  );
+}
+
+function handoffToConsultor(session: WhatsAppChatSession, companyName: string, lanc?: Lancamento): string {
+  session.extractedLead.intencaoAtual = 'aguardar_corretor';
+  session.extractedLead.estadoAtendimento = 'aguardando_corretor';
+  session.extractedLead.tipoAtendimento = 'Aguardando contato do corretor';
+  session.extractedLead.isComplete = true;
+  session.extractedLead.humanRequested = true;
+  session.extractedLead.pendingMedia = undefined;
+  if (!session.extractedLead.trilhaNavegacao.includes('Optou por falar com consultor')) {
+    session.extractedLead.trilhaNavegacao.push('Optou por falar com consultor');
+  }
+  const nome = lanc?.nome || session.extractedLead.selectedLancamentoNome;
+  return (
+    `Perfeito${session.name && session.name !== 'Cliente' ? `, ${session.name}` : ''}. ` +
+    `Vou pedir para um consultor da ${companyName} continuar` +
+    (nome ? ` sobre *${nome}*` : '') +
+    `.\n\nEle segue com você por aqui.`
+  );
+}
+
+function applyLaunchSubmenuAction(session: WhatsAppChatSession, lanc: Lancamento, action: LaunchSubmenuAction, companyName: string): string {
+  session.extractedLead.estadoAtendimento = 'lancamento_selecionado';
+  session.extractedLead.isComplete = false;
+  session.extractedLead.pendingMedia = undefined;
+
+  if (action === 'fotos') {
+    const uploads = lanc.fotosUpload || [];
+    if (!session.extractedLead.trilhaNavegacao.includes('Consultou Fotos')) {
+      session.extractedLead.trilhaNavegacao.push('Consultou Fotos');
+    }
+    if (uploads.length > 0) {
+      session.extractedLead.pendingMedia = 'fotos';
+      return `Seguem as fotos de *${lanc.nome}*.\n\n1️⃣ Fotos · 2️⃣ Mais informações · 3️⃣ Book PDF · 4️⃣ Consultor`;
+    }
+    const links = photoLinksFromCatalog(lanc);
+    if (links.length > 0) {
+      return (
+        `Ainda não tenho as fotos anexadas de *${lanc.nome}*. Galeria:\n` +
+        links.map((link) => `🔗 ${link}`).join('\n') +
+        `\n\n1️⃣ Fotos · 2️⃣ Mais informações · 3️⃣ Book PDF · 4️⃣ Consultor`
+      );
+    }
+    return `As fotos de *${lanc.nome}* ainda não estão disponíveis por aqui.\n\n2️⃣ Mais informações · 3️⃣ Book PDF · 4️⃣ Consultor`;
+  }
+
+  if (action === 'info') {
+    if (!session.extractedLead.trilhaNavegacao.includes('Consultou Descrição/Conceito')) {
+      session.extractedLead.trilhaNavegacao.push('Consultou Descrição/Conceito');
+    }
+    return buildLaunchDetails(lanc);
+  }
+
+  if (action === 'book') {
+    if (lanc.bookPdfUpload && (lanc.bookPdfUpload.path || lanc.bookPdfUpload.url)) {
+      session.extractedLead.pendingMedia = 'book';
+      return `Segue o book em PDF de *${lanc.nome}*.\n\n1️⃣ Fotos · 2️⃣ Mais informações · 3️⃣ Book PDF · 4️⃣ Consultor`;
+    }
+    return `O book em PDF de *${lanc.nome}* não está disponível por aqui.\n\n1️⃣ Fotos · 2️⃣ Mais informações · 4️⃣ Consultor`;
+  }
+
+  return handoffToConsultor(session, companyName, lanc);
+}
+
+/**
+ * After the catalog list: number/name selects a launch and opens its submenu.
+ * Digits 1–4 are submenu actions only once a launch is selected — never the main menu.
+ */
+function handleLaunchFollowUp(session: WhatsAppChatSession, lastUserMsg: string, companyName: string): string {
+  const listed = listedLaunches();
+  const estado = session.extractedLead.estadoAtendimento;
+  const selected =
+    listed.find((item) => item.id === session.extractedLead.selectedLancamentoId) ||
+    getActiveLancamentos().find((item) => item.id === session.extractedLead.selectedLancamentoId);
+
+  if (listed.length === 0) {
+    if (parseLaunchSubmenuAction(lastUserMsg) === 'consultor' || normalizeMenuChoice(lastUserMsg) === '1') {
+      return handoffToConsultor(session, companyName);
+    }
+    return buildLancamentosListingMessage(companyName);
+  }
+
+  if (estado === 'lancamento_selecionado' && selected) {
+    const action = parseLaunchSubmenuAction(lastUserMsg);
+    if (action) return applyLaunchSubmenuAction(session, selected, action, companyName);
+    const renamed = matchLaunchByName(lastUserMsg, listed);
+    if (renamed && renamed.id !== selected.id) {
+      const next = listed.find((item) => item.id === renamed.id)!;
+      selectLaunch(session, next);
+      return buildLaunchSubmenu(next);
+    }
+    return buildLaunchSubmenu(selected);
+  }
+
+  const byNumber = matchLaunchByNumber(lastUserMsg, listed);
+  const byName = matchLaunchByName(lastUserMsg, listed);
+  if (byNumber && Number(lastUserMsg.replace(/\D/g, '')) > listed.length) {
+    return `Não encontrei esse número. Responda de *1* a *${listed.length}*, ou com o nome do empreendimento.`;
+  }
+  const pickedId = byNumber?.id || byName?.id;
+  const picked = pickedId ? listed.find((item) => item.id === pickedId) : undefined;
+  if (!picked) {
+    const asNumber = (lastUserMsg || '').trim().replace(/\uFE0F|\u20E3/g, '');
+    if (/^\d{1,2}$/.test(asNumber)) {
+      return `Não encontrei o número ${asNumber}. Responda de *1* a *${listed.length}*, ou com o nome do empreendimento.`;
+    }
+    return `Me diga o *número* (1 a ${listed.length}) ou o *nome* do lançamento para abrir fotos, informações e book.`;
+  }
+  selectLaunch(session, picked);
+  return buildLaunchSubmenu(picked);
 }
 
 export function classifyIntent(text: string): 'aguardar_corretor' | 'lancamentos_na_planta' | 'imoveis_prontos' | 'duvida' | 'atendimento_humano' | null {
@@ -1104,6 +1346,11 @@ function getFallbackReply(
     );
   }
 
+  // Launch list / submenu: digits select a card or a submenu action, not the main menu.
+  if (isLaunchBrowseState(session.extractedLead.estadoAtendimento)) {
+    return handleLaunchFollowUp(session, lastUserMsg, companyName);
+  }
+
   // Ensure extracted property code & link are up to date
   const propInfo = extractPropertyCodeAndLink(session.initialMessage + ' ' + lastUserMsg);
   if (propInfo.code && !session.extractedLead.codigoImovel) session.extractedLead.codigoImovel = propInfo.code;
@@ -1472,19 +1719,24 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
   hasValidPhone = isValidPhoneNumber(session.phone);
 
   const lastMsg = userMessages[userMessages.length - 1]?.content || '';
-  const explicitClose = isExplicitCloseRequest(lastMsg);
+  const currentEstado = session.extractedLead.estadoAtendimento;
+  const inLaunchPicker = isLaunchBrowseState(currentEstado);
+  // Bare "1" inside the launch list/submenu is Fotos or card #1, not "aguardar corretor".
+  const explicitClose = isExplicitCloseRequest(lastMsg) && !inLaunchPicker;
   const info = session.extractedLead.informacoesColetadas || {};
 
   const currentIntent = session.extractedLead.intencaoAtual || detectedIntent;
-  const currentEstado = session.extractedLead.estadoAtendimento;
 
   const isBrokerOrHumanIntent = Boolean(
-    currentIntent === 'aguardar_corretor' ||
-      currentIntent === 'atendimento_humano' ||
-      currentEstado === 'aguardando_corretor' ||
-      currentEstado === 'atendimento_humano' ||
-      explicitClose ||
-      (tipo && (tipo.includes('corretor') || tipo.includes('Humano')))
+    !inLaunchPicker &&
+      (
+        currentIntent === 'aguardar_corretor' ||
+        currentIntent === 'atendimento_humano' ||
+        currentEstado === 'aguardando_corretor' ||
+        currentEstado === 'atendimento_humano' ||
+        explicitClose ||
+        (tipo && (tipo.includes('corretor') || tipo.includes('Humano')))
+      )
   );
 
   const isLancamentosComplete = currentEstado === 'lancamentos_concluido';
@@ -1499,11 +1751,15 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
   // Do not treat "3 messages + a property URL" as a finished lead.
   // Option 2/3/4 must deliver their step before any dispatch.
   const lastMenu = normalizeMenuChoice(lastMsg);
-  const blockedMenuTurn = lastMenu === '2' || lastMenu === '3' || lastMenu === '4';
+  const blockedMenuTurn =
+    (lastMenu === '2' || lastMenu === '3' || lastMenu === '4') &&
+    currentEstado !== 'aguardando_corretor' &&
+    currentEstado !== 'atendimento_humano';
 
   const isFullyQualified = Boolean(
     hasValidPhone &&
       hasConfirmedContact(session) &&
+      !inLaunchPicker &&
       !blockedMenuTurn &&
       (
         isBrokerOrHumanIntent ||
@@ -1535,6 +1791,7 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     selectedLancamentoId: selectedLancId || session.extractedLead.selectedLancamentoId,
     selectedLancamentoNome: selectedLancNome || session.extractedLead.selectedLancamentoNome,
     lancamentosListed: session.extractedLead.lancamentosListed || false,
+    pendingMedia: session.extractedLead.pendingMedia,
     nameConfirmed: session.extractedLead.nameConfirmed || false,
     phoneConfirmed: session.extractedLead.phoneConfirmed || false,
     dadosNaoConfirmados: session.extractedLead.dadosNaoConfirmados || false,
@@ -1874,53 +2131,35 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
   });
   scheduleSessionsPersist();
 
-  // 📲 Envio nativo de mídias (Fotos e Book PDF) pelo WhatsApp
+  // 📲 Envio nativo de mídias só quando o submenu do lançamento pediu fotos ou book
   try {
-    const lowerUserMsg = messageText.toLowerCase();
+    const pending = session.extractedLead.pendingMedia;
     const activeLanc = getActiveLancamentos();
-    const targetLanc =
-      activeLanc.find((l) => l.id === session.extractedLead.selectedLancamentoId) ||
-      activeLanc.find((l) => l.nome === session.extractedLead.selectedLancamentoNome) ||
-      (activeLanc.length === 1 ? activeLanc[0] : undefined);
+    const targetLanc = activeLanc.find((l) => l.id === session.extractedLead.selectedLancamentoId);
 
-    if (targetLanc) {
-      // 1. Envio nativo de Fotos
-      const isRequestingPhotos =
-        lowerUserMsg === '1' ||
-        lowerUserMsg.includes('foto') ||
-        lowerUserMsg.includes('imagem') ||
-        lowerUserMsg.includes('imagens') ||
-        lowerUserMsg.includes('galeria') ||
-        lowerUserMsg.includes('perspectiva');
-
-      if (isRequestingPhotos && targetLanc.fotosUpload && targetLanc.fotosUpload.length > 0) {
-        for (const foto of targetLanc.fotosUpload.slice(0, 4)) {
-          await whatsAppService.sendImageMessage(
-            jid,
-            foto.path || foto.url,
-            `📸 ${targetLanc.nome} - Direct Houses`
-          );
-        }
-      }
-
-      // 2. Envio nativo de Book PDF
-      const isRequestingBook =
-        lowerUserMsg.includes('book') ||
-        lowerUserMsg.includes('pdf') ||
-        lowerUserMsg.includes('apresenta') ||
-        lowerUserMsg.includes('material completo');
-
-      if (isRequestingBook && targetLanc.bookPdfUpload && (targetLanc.bookPdfUpload.path || targetLanc.bookPdfUpload.url)) {
-        await whatsAppService.sendDocumentMessage(
+    if (pending === 'fotos' && targetLanc?.fotosUpload && targetLanc.fotosUpload.length > 0) {
+      for (const foto of targetLanc.fotosUpload.slice(0, 4)) {
+        await whatsAppService.sendImageMessage(
           jid,
-          targetLanc.bookPdfUpload.path || targetLanc.bookPdfUpload.url,
-          targetLanc.bookPdfUpload.originalName || `${targetLanc.nome}_Apresentacao.pdf`,
-          `📄 Apresentação Comercial Oficial - ${targetLanc.nome}`
+          foto.path || foto.url,
+          `📸 ${targetLanc.nome} - Direct Houses`
         );
       }
     }
+
+    if (pending === 'book' && targetLanc?.bookPdfUpload && (targetLanc.bookPdfUpload.path || targetLanc.bookPdfUpload.url)) {
+      await whatsAppService.sendDocumentMessage(
+        jid,
+        targetLanc.bookPdfUpload.path || targetLanc.bookPdfUpload.url,
+        targetLanc.bookPdfUpload.originalName || `${targetLanc.nome}_Apresentacao.pdf`,
+        `📄 Apresentação Comercial Oficial - ${targetLanc.nome}`
+      );
+    }
+
+    session.extractedLead.pendingMedia = undefined;
   } catch (mediaErr) {
     console.warn('⚠️ [WhatsApp AI] Erro ao enviar mídia nativa:', mediaErr);
+    session.extractedLead.pendingMedia = undefined;
   }
 
   // Send response back to customer on WhatsApp
