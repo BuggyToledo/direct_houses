@@ -18,9 +18,7 @@ import { recordDistributionLog } from './roleta-history-service';
 import {
   formatLancamentosForPrompt,
   getActiveLancamentos,
-  getPublicLancamentosForAI,
   sanitizeAndAuditAIResponse,
-  Lancamento,
 } from './lancamentos-service';
 
 export interface WhatsAppChatSession {
@@ -52,6 +50,8 @@ export interface WhatsAppChatSession {
     finalStructuredText: string;
     selectedLancamentoId?: string;
     selectedLancamentoNome?: string;
+    /** True after option 2 has sent the registered lançamentos list (do not dispatch before this). */
+    lancamentosListed?: boolean;
     /** Confirmed only after explicit SIM / correction step (B) */
     nameConfirmed?: boolean;
     phoneConfirmed?: boolean;
@@ -621,7 +621,77 @@ export function extractPropertyCodeAndLink(text: string): { code?: string; link?
   return { code, link };
 }
 
+/** Bare post-confirm menu digit (1–4), including keycap emoji. */
+export function normalizeMenuChoice(text: string): '1' | '2' | '3' | '4' | null {
+  const t = (text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\uFE0F|\u20E3/g, '');
+  if (t === '1') return '1';
+  if (t === '2') return '2';
+  if (t === '3') return '3';
+  if (t === '4') return '4';
+  return null;
+}
+
+/**
+ * Menu options 2/3/4 and in-progress collection must stay on the state machine.
+ * Gemini was closing/dispatching option 2 in the same turn as the first question.
+ */
+function shouldUseDialogStateMachine(session: WhatsAppChatSession, messageText: string): boolean {
+  if (!hasConfirmedContact(session)) return false;
+  if (normalizeMenuChoice(messageText)) return true;
+  const estado = session.extractedLead.estadoAtendimento || '';
+  return (
+    estado === 'menu_inicial' ||
+    estado === 'lancamentos_apresentados' ||
+    estado === 'coletando_lancamento' ||
+    estado === 'coletando_prontos' ||
+    estado === 'respondendo_duvida'
+  );
+}
+
+/** Dispatch is not allowed on the turn that only opens a menu option or is still collecting. */
+function isPrematureDispatchTurn(session: WhatsAppChatSession, lastUserText: string): boolean {
+  const choice = normalizeMenuChoice(lastUserText);
+  if (choice === '2' || choice === '3' || choice === '4') return true;
+  const estado = session.extractedLead.estadoAtendimento || '';
+  if (estado === 'lancamentos_apresentados' || estado === 'coletando_lancamento' || estado === 'coletando_prontos') {
+    return true;
+  }
+  if (estado === 'respondendo_duvida' && !session.extractedLead.informacoesColetadas?.duvidaTexto) {
+    return true;
+  }
+  return false;
+}
+
+function buildLancamentosListingMessage(companyName: string): string {
+  const items = getActiveLancamentos();
+  if (!items.length) {
+    return (
+      `No momento não há lançamentos na planta cadastrados na *${companyName}*.\n\n` +
+      `Posso seguir com imóveis prontos (3), tirar uma dúvida (4) ou chamar um consultor (1).`
+    );
+  }
+  const cards = items.slice(0, 8).map((l, i) => {
+    const bits = [
+      `${i + 1}️⃣ *${l.nome}*`,
+      l.bairro ? `📍 ${l.bairro}${l.cidade ? ` (${l.cidade})` : ''}` : '',
+      l.tipologias ? `🏠 ${l.tipologias}` : '',
+      l.precoAPartirDe ? `💰 A partir de ${l.precoAPartirDe}` : '',
+      l.urlPublicaDirectHouse ? `🔗 ${l.urlPublicaDirectHouse}` : '',
+    ].filter(Boolean);
+    return bits.join('\n');
+  });
+  return (
+    `Estes são os lançamentos na planta cadastrados na *${companyName}*:\n\n` +
+    `${cards.join('\n\n')}\n\n` +
+    `Se quiser filtrar, me diga se é para *morar*, *investir* ou se ainda está *avaliando* — ou o número do empreendimento.`
+  );
+}
+
 export function classifyIntent(text: string): 'aguardar_corretor' | 'lancamentos_na_planta' | 'imoveis_prontos' | 'duvida' | 'atendimento_humano' | null {
+  const menu = normalizeMenuChoice(text);
   const t = (text || '').toLowerCase().trim();
 
   // Atendimento humano
@@ -634,6 +704,7 @@ export function classifyIntent(text: string): 'aguardar_corretor' | 'lancamentos
 
   // Aguardar corretor
   if (
+    menu === '1' ||
     t === '1' ||
     /^(1|aguard(o|ar)(\s+o?\s*contato)?|pode\s+pedir\s+para\s+o\s+corretor\s+me\s+chamar|s[oó] isso|pode\s+chamar|valeu|obrigad[oa])\.?$/i.test(t) ||
     /aguard(ar|o)\s+(o\s+)?(contato|consultor|corretor)/i.test(t)
@@ -643,6 +714,7 @@ export function classifyIntent(text: string): 'aguardar_corretor' | 'lancamentos
 
   // Lançamentos na planta
   if (
+    menu === '2' ||
     t === '2' ||
     /\b(lan[çc]amento(s)?|na\s+planta|em\s+constru[çc][ãa]o|apartamento(s)?\s+novo(s)?|novos)\b/i.test(t) ||
     /conhecer\s+lan[çc]amentos/i.test(t)
@@ -652,6 +724,7 @@ export function classifyIntent(text: string): 'aguardar_corretor' | 'lancamentos
 
   // Imóveis prontos
   if (
+    menu === '3' ||
     t === '3' ||
     /\b(im[oó]ve(l|is)\s+pronto(s)?|comprar|alugar|procurando\s+(uma?\s+)?casa|apartamento\s+pronto|buscar\s+im[oó]veis)\b/i.test(t)
   ) {
@@ -660,6 +733,7 @@ export function classifyIntent(text: string): 'aguardar_corretor' | 'lancamentos
 
   // Dúvida
   if (
+    menu === '4' ||
     t === '4' ||
     /^(4|d[uú]vida|tirar\s+uma?\s+d[uú]vida|pergunt(a|ar)|aceita\s+financiamento|informa[çc][õo]es)\b/i.test(t) ||
     (t.endsWith('?') && t.length > 5)
@@ -893,44 +967,20 @@ Depois disso:
 - Não prometa prazo de contato, salvo se houver um prazo definido pelo sistema.
 
 ## FLUXO 2 — LANÇAMENTOS NA PLANTA
-Colete as informações uma por vez, nesta ordem:
-1. Finalidade (se ainda não informou):
-   - morar
-   - investir
-   - ainda não decidiu
-   Pergunte: "Ótimo! Você procura um lançamento na planta para morar, investir ou ainda está avaliando?"
+Na PRIMEIRA resposta deste fluxo, liste os empreendimentos do catálogo autorizado (nome, região, tipologia e link). Não faça só a pergunta de morar/investir. Não encerre o lead, não diga que já encaminhou ao consultor e não trate a opção 2 como atendimento concluído.
+Só depois que o cliente responder (finalidade, região ou número do empreendimento) continue a qualificação, uma pergunta por vez:
+1. Finalidade (se ainda não informou): morar, investir ou ainda está avaliando.
+2. Região (se ainda não informou).
+3. Faixa de valor (se ainda não informou).
+4. Quantidade de quartos (se ainda não informou).
+Quando o catálogo já foi apresentado e houver informações suficientes, aí sim pode encaminhar.
+Não repita a lista nem encerre o lead na mesma mensagem em que o cliente apenas escolheu a opção 2.
 
-2. Região (se ainda não informou):
-   "Em qual cidade ou região você gostaria de encontrar o lançamento?"
-
-3. Faixa de valor (se ainda não informou):
-   "Qual faixa de valor você pretende considerar?"
-   Opções sugeridas:
-   - Até R$ 300 mil
-   - De R$ 300 mil a R$ 500 mil
-   - De R$ 500 mil a R$ 800 mil
-   - Acima de R$ 800 mil
-   - Ainda não defini
-
-4. Quantidade de quartos (se ainda não informou):
-   "Você procura um imóvel com quantos quartos?"
-   Opções sugeridas:
-   - 1 quarto
-   - 2 quartos
-   - 3 quartos
-   - 4 ou mais quartos
-   - Ainda não defini
-
-5. Forma de pagamento, somente se necessário:
-   "Você pretende comprar à vista, financiar ou ainda não decidiu?"
-
-Quando tiver informações suficientes, diga:
-"Entendi. Você procura um imóvel para {{finalidade}}, em {{regiao}}, com {{quantidade_quartos}} quartos e na faixa de {{faixa_valor}}. Vou verificar as opções compatíveis para esse perfil."
-E em seguida, apresente os lançamentos autorizados do catálogo abaixo que melhor combinam com essa busca.
+Quando tiver informações suficientes depois da lista, confirme o perfil em uma frase e ofereça encaminhar ao consultor.
 Não repita perguntas já respondidas.
 
 ## FLUXO 3 — IMÓVEIS PRONTOS
-Colete as informações uma por vez, nesta ordem:
+Não encerre nem encaminhe o lead na mensagem em que o cliente apenas escolheu a opção 3. Colete as informações uma por vez e só encaminhe depois das respostas:
 1. Finalidade (se ainda não informou):
    "Você procura um imóvel pronto para comprar ou alugar?" (Comprar | Alugar | Ainda não decidi)
 
@@ -951,6 +1001,7 @@ Quando tiver informações suficientes, confirme:
 Depois, informe que as opções compatíveis serão verificadas e encaminhadas por nossos consultores.
 
 ## FLUXO 4 — TIRAR UMA DÚVIDA
+Se o cliente apenas escolher a opção 4, pergunte a dúvida e NÃO encerre o lead nessa mensagem.
 Responda:
 "Claro. Escreva sua dúvida em uma única mensagem. Posso ajudar com informações sobre o imóvel, localização, documentação, financiamento, valores ou processo de compra e aluguel."
 
@@ -1096,10 +1147,21 @@ function getFallbackReply(
     );
   }
 
-  // 5. Lançamentos na Planta (FLUXO 2)
+  // 5. Lançamentos na Planta (FLUXO 2) — listar catálogo ANTES de qualificar ou despachar
   if (currentIntent === 'lancamentos_na_planta') {
-    session.extractedLead.estadoAtendimento = 'coletando_lancamento';
     session.extractedLead.tipoAtendimento = 'Lançamento na Planta';
+    session.extractedLead.isComplete = false;
+
+    if (!session.extractedLead.lancamentosListed) {
+      session.extractedLead.lancamentosListed = true;
+      session.extractedLead.estadoAtendimento = 'lancamentos_apresentados';
+      if (!session.extractedLead.trilhaNavegacao.includes('Recebeu lista de lançamentos na planta')) {
+        session.extractedLead.trilhaNavegacao.push('Recebeu lista de lançamentos na planta');
+      }
+      return buildLancamentosListingMessage(companyName);
+    }
+
+    session.extractedLead.estadoAtendimento = 'coletando_lancamento';
 
     if (!info.finalidade) {
       return `Ótimo! Você procura um lançamento na planta para morar, investir ou ainda está avaliando?`;
@@ -1212,7 +1274,9 @@ function getFallbackReply(
     }
 
     info.duvidaTexto = lastUserMsg;
+    session.extractedLead.informacoesColetadas = info;
     session.extractedLead.isComplete = true;
+    session.extractedLead.estadoAtendimento = 'duvida_registrada';
     return (
       `Registrei sua pergunta sobre "${lastUserMsg}".\n\n` +
       `Para te passar todos os detalhes e valores atualizados com precisão, nosso consultor responsável da ${companyName} entrará em contato com você por aqui em instantes!`
@@ -1404,9 +1468,8 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     }
   }
 
-  // Patch B: isComplete com telefone real + qualquer trilha/intenção concluída
+  // Patch B: qualificação só em estado terminal (não na escolha crua do menu 2/3/4)
   hasValidPhone = isValidPhoneNumber(session.phone);
-  const hasRealName = Boolean(session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name));
 
   const lastMsg = userMessages[userMessages.length - 1]?.content || '';
   const explicitClose = isExplicitCloseRequest(lastMsg);
@@ -1424,39 +1487,29 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
       (tipo && (tipo.includes('corretor') || tipo.includes('Humano')))
   );
 
-  const isLancamentosComplete = Boolean(
-    currentEstado === 'lancamentos_concluido' ||
-      (currentIntent === 'lancamentos_na_planta' &&
-        (info.finalidade || info.regiao || session.extractedLead.selectedLancamentoNome))
-  );
+  const isLancamentosComplete = currentEstado === 'lancamentos_concluido';
 
-  const isProntosComplete = Boolean(
-    currentEstado === 'prontos_concluido' ||
-      (currentIntent === 'imoveis_prontos' && (info.tipoImovel || info.finalidade || info.regiao))
-  );
+  const isProntosComplete = currentEstado === 'prontos_concluido';
 
   const isDuvidaComplete = Boolean(
-    currentEstado === 'respondendo_duvida' && (info.duvidaTexto || userMessages.length >= 2)
+    currentEstado === 'duvida_registrada' ||
+      (Boolean(info.duvidaTexto) && normalizeMenuChoice(lastMsg) !== '4' && currentEstado === 'respondendo_duvida')
   );
 
-  const isGeneralQualified = Boolean(
-    userMessages.length >= 3 &&
-      hasRealName &&
-      (tipo || session.extractedLead.produtoImovel || session.extractedLead.codigoImovel || session.extractedLead.selectedLancamentoNome)
-  );
+  // Do not treat "3 messages + a property URL" as a finished lead.
+  // Option 2/3/4 must deliver their step before any dispatch.
+  const lastMenu = normalizeMenuChoice(lastMsg);
+  const blockedMenuTurn = lastMenu === '2' || lastMenu === '3' || lastMenu === '4';
 
   const isFullyQualified = Boolean(
     hasValidPhone &&
       hasConfirmedContact(session) &&
+      !blockedMenuTurn &&
       (
-        session.extractedLead.isComplete ||
-        session.status === 'qualified' ||
-        session.status === 'dispatched' ||
         isBrokerOrHumanIntent ||
         isLancamentosComplete ||
         isProntosComplete ||
-        isDuvidaComplete ||
-        isGeneralQualified
+        isDuvidaComplete
       )
   );
 
@@ -1481,6 +1534,7 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     informacoesColetadas: session.extractedLead.informacoesColetadas || {},
     selectedLancamentoId: selectedLancId || session.extractedLead.selectedLancamentoId,
     selectedLancamentoNome: selectedLancNome || session.extractedLead.selectedLancamentoNome,
+    lancamentosListed: session.extractedLead.lancamentosListed || false,
     nameConfirmed: session.extractedLead.nameConfirmed || false,
     phoneConfirmed: session.extractedLead.phoneConfirmed || false,
     dadosNaoConfirmados: session.extractedLead.dadosNaoConfirmados || false,
@@ -1718,10 +1772,14 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
     replyText = earlyGate;
   }
 
-  // Generate AI reply only after contact is confirmed
+  // Menu 2/3/4 and open collection stay on the dialog state machine so Gemini
+  // cannot close the lead in the same turn as the menu choice.
   const aiClient = getGeminiClient();
+  const forceStateMachine = !replyText && shouldUseDialogStateMachine(session, messageText);
 
-  if (!replyText && hasConfirmedContact(session) && aiClient) {
+  if (forceStateMachine) {
+    replyText = getFallbackReply(session, companyName);
+  } else if (!replyText && hasConfirmedContact(session) && aiClient) {
     const systemInstruction = buildSystemPrompt(session, companyName);
     const contents = session.messages.map((m) => ({
       role: m.role === 'assistant' ? 'model' : 'user',
@@ -1877,7 +1935,8 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
     roletaConfig.autoDispatchEnabled &&
     session.technicalValidationPassed &&
     session.status === 'qualified' &&
-    isValidPhoneNumber(session.phone);
+    isValidPhoneNumber(session.phone) &&
+    !isPrematureDispatchTurn(session, messageText);
 
   if (shouldDispatch) {
     const delaySeconds = roletaConfig.dispatchDelaySeconds ?? 3;
