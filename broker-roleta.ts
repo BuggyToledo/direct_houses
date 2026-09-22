@@ -385,7 +385,9 @@ export function formatPhoneForDisplay(phone: string): string {
 }
 
 /**
- * Builds the structured WhatsApp notification message sent to the broker
+ * Builds a SLIM WhatsApp dossier for the broker:
+ * Nome, Telefone, Produto/URL, Tipo/interesse, 2–4 lines of recent history.
+ * No giant trail / observations dump.
  */
 export function formatBrokerLeadMessage(
   lead: {
@@ -401,6 +403,11 @@ export function formatBrokerLeadMessage(
     resumoNavegacao?: string;
     historicoMensagens?: Array<{ role: string; content: string; timestamp?: string }>;
     isIncrementalUpdate?: boolean;
+    nameConfirmed?: boolean;
+    phoneConfirmed?: boolean;
+    dadosNaoConfirmados?: boolean;
+    linkImovel?: string;
+    codigoImovel?: string;
   },
   companyName: string = 'Direct Houses',
   clientPhone?: string
@@ -410,70 +417,55 @@ export function formatBrokerLeadMessage(
   const displayPhone = formatPhoneForDisplay(phone);
   const waLink = cleanPhone ? `https://wa.me/${cleanPhone}` : '';
 
-  // Formatar trilha de navegação se existir
-  let trilhaText = '';
-  if (lead.trilhaNavegacao && lead.trilhaNavegacao.length > 0) {
-    trilhaText = `🧭 *TRILHA DE NAVEGAÇÃO DO CLIENTE:*\n${lead.trilhaNavegacao.map((t) => `• ${t}`).join('\n')}\n\n`;
-  } else if (lead.resumoNavegacao) {
-    trilhaText = `🧭 *RESUMO DA NAVEGAÇÃO:*\n${lead.resumoNavegacao}\n\n`;
+  const dadosFlag =
+    lead.dadosNaoConfirmados || (!lead.nameConfirmed && !lead.phoneConfirmed)
+      ? '⚠️ *Dados não confirmados pelo cliente*\n'
+      : lead.nameConfirmed && lead.phoneConfirmed
+      ? '✅ Contato confirmado\n'
+      : '';
+
+  const produtoLine =
+    lead.produtoImovel ||
+    (lead.codigoImovel ? `Imóvel Cód. ${lead.codigoImovel}` : '') ||
+    lead.linkImovel ||
+    'A combinar';
+  let urlLine = lead.linkImovel || '';
+  if (!urlLine && lead.initialMessage) {
+    const m = lead.initialMessage.match(/https?:\/\/[^\s]+|(?:www\.)[^\s]+|directhouses\.com\.br\/[^\s]+/i);
+    if (m) urlLine = m[0].replace(/[.,!?;:)]$/, '');
   }
 
-  // Formatar histórico selecionado (apenas interações alteradas/recentes, evitando mensagens gigantes)
+  // 2–4 lines of recent user/assistant history only
   let chatHistoryText = '';
   if (lead.historicoMensagens && lead.historicoMensagens.length > 0) {
-    const isIncremental = Boolean(lead.isIncrementalUpdate);
-    const headerTitle = isIncremental
-      ? `💬 *HISTÓRICO ALTERADO (NOVAS INTERAÇÕES DO CLIENTE):*`
-      : `💬 *HISTÓRICO RECENTE / ALTERAÇÕES DO CLIENTE:*`;
-
-    // Filtra e compacta para manter a mensagem do corretor elegante e no tamanho ideal
-    const compactMessages = lead.historicoMensagens.slice(-5).map((m) => {
-      const roleIcon = m.role === 'user' ? '👤 Cliente' : '🤖 IA';
-      let cleanText = (m.content || '').trim();
-      // Respostas da IA longas são resumidas/truncadas para não poluir o celular do corretor
-      if (m.role === 'assistant' && cleanText.length > 140) {
-        cleanText = cleanText.substring(0, 137).trim() + '...';
-      }
-      return `${roleIcon}: ${cleanText}`;
+    const compactMessages = lead.historicoMensagens.slice(-4).map((m) => {
+      const roleIcon = m.role === 'user' ? '👤' : '🤖';
+      let cleanText = (m.content || '').trim().replace(/\s+/g, ' ');
+      if (cleanText.length > 120) cleanText = cleanText.substring(0, 117).trim() + '...';
+      return `${roleIcon} ${cleanText}`;
     });
-
-    chatHistoryText = `${headerTitle}\n` + compactMessages.join('\n\n') + `\n\n`;
+    chatHistoryText = `💬 *Últimas mensagens:*\n` + compactMessages.join('\n') + `\n`;
   }
 
-  if (lead.isTimeoutRecovery) {
-    return (
-      `⚠️ *LEAD CAPTURADO POR INATIVIDADE (5 MIN SEM RESPOSTA)*\n\n` +
-      `Olá, corretor! Um cliente iniciou contato no WhatsApp da *${companyName}*, mas parou de responder às perguntas do assistente virtual. Para não perdermos o lead, ele foi direcionado imediatamente para você.\n\n` +
-      `👤 *Nome:* ${lead.nome || 'Cliente WhatsApp'}\n` +
-      `📱 *Telefone:* ${displayPhone || 'Capturado na sessão'}\n` +
-      (lead.initialMessage ? `💬 *Primeira mensagem / Imóvel:* "${lead.initialMessage}"\n` : '') +
-      trilhaText +
-      chatHistoryText +
-      `⏱️ *Horário:* ${new Date().toLocaleString('pt-BR')}\n` +
-      `📌 *Ação sugerida:* Entre em contato diretamente pelo WhatsApp abaixo para dar atendimento humanizado.\n\n` +
-      (waLink
-        ? `💬 *CLIQUE AQUI PARA INICIAR A CONVERSA COM O CLIENTE:*\n${waLink}`
-        : `_Telefone não disponível para link direto._`)
-    );
-  }
+  const interesse =
+    lead.tipoAtendimento ||
+    (lead.resumoNavegacao ? lead.resumoNavegacao.split('➔').pop()?.trim() : '') ||
+    'Interesse imobiliário';
+
+  const header = lead.isTimeoutRecovery
+    ? `⚠️ *LEAD POR INATIVIDADE — ${companyName}*\n\n`
+    : `🏡 *NOVO LEAD — ${companyName}*\n\n`;
 
   return (
-    `🏡 *NOVO LEAD QUALIFICADO - ${companyName.toUpperCase()}*\n\n` +
-    `Olá, corretor! Um novo cliente acabou de ser qualificado pelo assistente virtual e direcionado para você.\n\n` +
-    `👤 *Nome:* ${lead.nome || 'Não informado'}\n` +
-    `📱 *Telefone:* ${displayPhone || lead.telefone || phone || 'Não informado'}\n` +
-    `🎯 *Tipo de Atendimento:* ${(lead.tipoAtendimento || 'Interesse Imobiliário').toUpperCase()}\n` +
-    `🏢 *Produto / Imóvel:* ${lead.produtoImovel || 'A combinar'}\n` +
-    trilhaText +
-    chatHistoryText +
-    `📝 *Observações Finais:* ${lead.observacoes || 'Nenhuma'}\n` +
-    (lead.initialMessage ? `💬 *Origem / Link:* "${lead.initialMessage}"\n` : '') +
-    `🔒 *Consentimento:* Sim, autorizado pelo cliente conforme LGPD\n` +
-    `📍 *Origem:* ${lead.origem || 'WhatsApp Web Direct Houses'}\n` +
-    `⏱️ *Recebido em:* ${new Date().toLocaleString('pt-BR')}\n\n` +
-    (waLink
-      ? `💬 *CLIQUE AQUI PARA INICIAR A CONVERSA COM O CLIENTE:*\n${waLink}`
-      : `_Telefone não disponível para link direto._`)
+    header +
+    dadosFlag +
+    `👤 *Nome:* ${lead.nome || 'Cliente WhatsApp'}\n` +
+    `📱 *Telefone:* ${displayPhone || 'Não informado'}\n` +
+    `🏢 *Produto/URL:* ${produtoLine}${urlLine && !String(produtoLine).includes(urlLine) ? `\n🔗 ${urlLine}` : ''}\n` +
+    `🎯 *Tipo/interesse:* ${interesse}\n` +
+    (chatHistoryText ? `\n${chatHistoryText}` : '') +
+    `\n⏱️ ${new Date().toLocaleString('pt-BR')}\n` +
+    (waLink ? `\n💬 Falar com o cliente:\n${waLink}` : `_Telefone sem link direto._`)
   );
 }
 

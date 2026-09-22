@@ -166,6 +166,12 @@ function deleteLeadFromJson(id: string): boolean {
 }
 
 // Pure builder that merges partial input with existing records or defaults
+function extractPropertyUrlFromText(text?: string): string {
+  if (!text) return '';
+  const m = text.match(/https?:\/\/[^\s]+|(?:www\.)[^\s]+|directhouses\.com\.br\/[^\s]+/i);
+  return m ? m[0].replace(/[.,!?;:)]$/, '').toLowerCase().replace(/\/$/, '') : '';
+}
+
 function buildSavedLead(leadData: Partial<PersistentLead>, existingLeads: PersistentLead[]): PersistentLead {
   const cleanPhone = (leadData.telefone || '').replace(/\D/g, '');
   let existingIndex = -1;
@@ -190,6 +196,56 @@ function buildSavedLead(leadData: Partial<PersistentLead>, existingLeads: Persis
 
   if (existingIndex !== -1) {
     const current = existingLeads[existingIndex];
+    const newUrl = extractPropertyUrlFromText(leadData.initialMessage);
+    const oldUrl = extractPropertyUrlFromText(current.initialMessage);
+    const differentProperty =
+      (newUrl && oldUrl && newUrl !== oldUrl) ||
+      Boolean(
+        leadData.produtoImovel &&
+          current.produtoImovel &&
+          leadData.produtoImovel !== current.produtoImovel &&
+          leadData.produtoImovel !== 'A combinar' &&
+          leadData.produtoImovel !== 'A combinar com corretor' &&
+          leadData.produtoImovel !== 'Imóvel sob consulta'
+      );
+
+    // Never overwrite current cycle product/obs with stale phone-merge data when property differs
+    const produtoImovel = leadData.produtoImovel
+      ? leadData.produtoImovel
+      : differentProperty
+      ? 'A combinar'
+      : current.produtoImovel;
+    const observacoes = leadData.observacoes
+      ? leadData.observacoes
+      : differentProperty
+      ? ''
+      : current.observacoes || '';
+    const initialMessage = leadData.initialMessage
+      ? leadData.initialMessage
+      : differentProperty
+      ? leadData.initialMessage || ''
+      : current.initialMessage;
+    const tipoAtendimento = leadData.tipoAtendimento
+      ? leadData.tipoAtendimento
+      : differentProperty
+      ? ''
+      : current.tipoAtendimento;
+    const trilhaNavegacao = leadData.trilhaNavegacao
+      ? leadData.trilhaNavegacao
+      : differentProperty
+      ? []
+      : current.trilhaNavegacao || [];
+    const resumoNavegacao = leadData.resumoNavegacao
+      ? leadData.resumoNavegacao
+      : differentProperty
+      ? ''
+      : current.resumoNavegacao;
+    const historicoMensagens = leadData.historicoMensagens
+      ? leadData.historicoMensagens
+      : differentProperty
+      ? []
+      : current.historicoMensagens || [];
+
     return {
       ...current,
       ...leadData,
@@ -199,22 +255,22 @@ function buildSavedLead(leadData: Partial<PersistentLead>, existingLeads: Persis
           : current.nome,
       telefone: leadData.telefone || current.telefone,
       email: leadData.email || current.email,
-      tipoAtendimento: leadData.tipoAtendimento || current.tipoAtendimento,
-      produtoImovel: leadData.produtoImovel || current.produtoImovel,
-      valorInteresse: leadData.valorInteresse || current.valorInteresse,
-      bairrosInteresse: leadData.bairrosInteresse || current.bairrosInteresse || [],
+      tipoAtendimento: tipoAtendimento || current.tipoAtendimento,
+      produtoImovel,
+      valorInteresse: leadData.valorInteresse || (differentProperty ? undefined : current.valorInteresse),
+      bairrosInteresse: leadData.bairrosInteresse || (differentProperty ? [] : current.bairrosInteresse || []),
       temperatura: leadData.temperatura || current.temperatura || initialTemperatura,
-      observacoes: leadData.observacoes || current.observacoes || '',
-      initialMessage: leadData.initialMessage || current.initialMessage,
+      observacoes,
+      initialMessage,
       status: leadData.status || current.status || initialStage,
       tags: leadData.tags || current.tags || [],
       notasInternas: leadData.notasInternas || current.notasInternas || [],
       assignedBroker: leadData.assignedBroker || current.assignedBroker,
       historicoDistribuicoes: leadData.historicoDistribuicoes || current.historicoDistribuicoes || [],
-      rawStructuredText: leadData.rawStructuredText || current.rawStructuredText,
-      trilhaNavegacao: leadData.trilhaNavegacao || current.trilhaNavegacao || [],
-      resumoNavegacao: leadData.resumoNavegacao || current.resumoNavegacao,
-      historicoMensagens: leadData.historicoMensagens || current.historicoMensagens || [],
+      rawStructuredText: leadData.rawStructuredText || (differentProperty ? '' : current.rawStructuredText),
+      trilhaNavegacao,
+      resumoNavegacao,
+      historicoMensagens,
       updatedAt: now,
     };
   }
