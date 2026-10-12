@@ -21,6 +21,27 @@ import {
   sanitizeAndAuditAIResponse,
   Lancamento,
 } from './lancamentos-service';
+import {
+  classifyIntent,
+  formatStudioOptionCard,
+  isPlantaAdvanceMessage,
+  normalizeCtaText,
+  normalizeMenuChoice,
+  sortStudioLaunches,
+  stateBlocksLoneMenuOne,
+  SOB_CONSULTA,
+  TIPO_PLANTA,
+  TIPO_STUDIO,
+  TRAIL_PLANTA,
+  TRAIL_PLANTA_PROFILE,
+  TRAIL_PLANTA_QA,
+  TRAIL_STUDIO,
+  TRAIL_STUDIO_LIST,
+} from './whatsapp-cta';
+
+// classifyIntent lives in whatsapp-cta.ts so tests can run without booting WhatsApp.
+// cta_studio and cta_planta are matched before the generic menu intents.
+export { classifyIntent, normalizeMenuChoice };
 
 export interface WhatsAppChatSession {
   jid: string;
@@ -64,7 +85,15 @@ export interface WhatsAppChatSession {
     historicoMensagens?: Array<{ role: string; content: string; timestamp: string }>;
     codigoImovel?: string;
     linkImovel?: string;
-    intencaoAtual?: 'aguardar_corretor' | 'lancamentos_na_planta' | 'imoveis_prontos' | 'duvida' | 'atendimento_humano' | string;
+    intencaoAtual?:
+      | 'cta_studio'
+      | 'cta_planta'
+      | 'aguardar_corretor'
+      | 'lancamentos_na_planta'
+      | 'imoveis_prontos'
+      | 'duvida'
+      | 'atendimento_humano'
+      | string;
     estadoAtendimento?: string;
     informacoesColetadas?: {
       finalidade?: string;
@@ -73,6 +102,8 @@ export interface WhatsAppChatSession {
       faixaValor?: string;
       quantidadeQuartos?: string;
       formaPagamento?: string;
+      /** Timeline for off-plan purchase (cta_planta qualification). */
+      prazo?: string;
       duvidaTexto?: string;
       [key: string]: any;
     };
@@ -501,6 +532,18 @@ function applyTypedNameFromMessages(session: WhatsAppChatSession, userMessages: 
   return applied;
 }
 
+/** After nome + telefone: open a pending CTA, or the main menu. Null lets Gemini answer planta. */
+function replyAfterContactConfirmed(session: WhatsAppChatSession, companyName: string): string | null {
+  if (session.extractedLead.intencaoAtual === 'cta_studio') {
+    return presentStudioOptions(session, companyName);
+  }
+  if (session.extractedLead.intencaoAtual === 'cta_planta') {
+    beginPlantaQuestionFlow(session);
+    return null;
+  }
+  return buildMenuAfterConfirmation(session);
+}
+
 /**
  * Handles early name/phone confirmation gate. Returns reply text if this turn
  * should short-circuit before menu/AI trail; otherwise null.
@@ -513,6 +556,11 @@ function processContactConfirmationGate(
   if (hasConfirmedContact(session)) {
     session.awaitingContactConfirmation = false;
     return null;
+  }
+
+  const inboundCta = classifyIntent(messageText);
+  if (inboundCta === 'cta_studio' || inboundCta === 'cta_planta') {
+    applyCtaMarkers(session, inboundCta);
   }
 
   const last = (messageText || '').trim();
@@ -550,7 +598,7 @@ function processContactConfirmationGate(
     if (!session.extractedLead.trilhaNavegacao.includes('Contato confirmado (nome + telefone)')) {
       session.extractedLead.trilhaNavegacao.push('Contato confirmado (nome + telefone)');
     }
-    return buildMenuAfterConfirmation(session);
+    return replyAfterContactConfirmed(session, companyName);
   }
 
   // User sent a clear full name + we already have phone → treat as correction/confirm
@@ -563,7 +611,7 @@ function processContactConfirmationGate(
     if (!session.extractedLead.trilhaNavegacao.includes('Nome corrigido e confirmado pelo cliente')) {
       session.extractedLead.trilhaNavegacao.push('Nome corrigido e confirmado pelo cliente');
     }
-    return buildMenuAfterConfirmation(session);
+    return replyAfterContactConfirmed(session, companyName);
   }
 
   // First turn of cycle: welcome + confirmation in one reply
@@ -624,34 +672,27 @@ export function extractPropertyCodeAndLink(text: string): { code?: string; link?
   return { code, link };
 }
 
-/** Bare post-confirm menu digit (1–4), including keycap emoji. */
-export function normalizeMenuChoice(text: string): '1' | '2' | '3' | '4' | null {
-  const t = (text || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\uFE0F|\u20E3/g, '');
-  if (t === '1') return '1';
-  if (t === '2') return '2';
-  if (t === '3') return '3';
-  if (t === '4') return '4';
-  return null;
-}
-
 /**
  * Menu options 2/3/4 and in-progress collection must stay on the state machine.
  * Gemini was closing/dispatching option 2 in the same turn as the first question.
  */
 function shouldUseDialogStateMachine(session: WhatsAppChatSession, messageText: string): boolean {
   if (!hasConfirmedContact(session)) return false;
+  // Off-plan questions use the Gemini free-answer path with a focused prompt.
+  if (isPlantaFreeAnswerTurn(session, messageText)) return false;
   if (normalizeMenuChoice(messageText)) return true;
+  if (classifyIntent(messageText) === 'cta_studio') return true;
   const estado = session.extractedLead.estadoAtendimento || '';
+  if (estado === 'planta_duvidas' && isPlantaAdvanceMessage(messageText)) return true;
   return (
     estado === 'menu_inicial' ||
     estado === 'lancamentos_apresentados' ||
     estado === 'lancamento_selecionado' ||
     estado === 'coletando_lancamento' ||
     estado === 'coletando_prontos' ||
-    estado === 'respondendo_duvida'
+    estado === 'respondendo_duvida' ||
+    estado === 'studios_apresentados' ||
+    estado === 'coletando_planta'
   );
 }
 
@@ -667,15 +708,9 @@ function isPrematureDispatchTurn(session: WhatsAppChatSession, lastUserText: str
   if (choice === '4' && (estado === 'aguardando_corretor' || estado === 'atendimento_humano')) {
     return false;
   }
+  if (choice === '1' && stateBlocksLoneMenuOne(estado)) return true;
   if (choice === '2' || choice === '3' || choice === '4') return true;
-  if (
-    estado === 'lancamentos_apresentados' ||
-    estado === 'lancamento_selecionado' ||
-    estado === 'coletando_lancamento' ||
-    estado === 'coletando_prontos'
-  ) {
-    return true;
-  }
+  if (stateBlocksLoneMenuOne(estado)) return true;
   if (estado === 'respondendo_duvida' && !session.extractedLead.informacoesColetadas?.duvidaTexto) {
     return true;
   }
@@ -781,11 +816,14 @@ function buildLaunchSubmenu(lanc: Lancamento): string {
 }
 
 function selectLaunch(session: WhatsAppChatSession, lanc: Lancamento): void {
+  const fromStudio = session.extractedLead.intencaoAtual === 'cta_studio' || session.extractedLead.tipoAtendimento === TIPO_STUDIO;
   session.extractedLead.selectedLancamentoId = lanc.id;
   session.extractedLead.selectedLancamentoNome = lanc.nome;
-  session.extractedLead.produtoImovel = `Lançamento ${lanc.nome}${lanc.tipologias ? ` (${lanc.tipologias})` : ''}`;
-  session.extractedLead.intencaoAtual = 'lancamentos_na_planta';
-  session.extractedLead.tipoAtendimento = 'Lançamento na Planta';
+  session.extractedLead.produtoImovel = fromStudio
+    ? `Studio ${lanc.nome}${lanc.tipologias ? ` (${lanc.tipologias})` : ''}`
+    : `Lançamento ${lanc.nome}${lanc.tipologias ? ` (${lanc.tipologias})` : ''}`;
+  session.extractedLead.intencaoAtual = fromStudio ? 'cta_studio' : 'lancamentos_na_planta';
+  session.extractedLead.tipoAtendimento = fromStudio ? TIPO_STUDIO : 'Lançamento na Planta';
   session.extractedLead.estadoAtendimento = 'lancamento_selecionado';
   session.extractedLead.isComplete = false;
   session.extractedLead.humanRequested = false;
@@ -823,9 +861,13 @@ function buildLaunchDetails(lanc: Lancamento): string {
 }
 
 function handoffToConsultor(session: WhatsAppChatSession, companyName: string, lanc?: Lancamento): string {
+  const preserveStudio =
+    session.extractedLead.intencaoAtual === 'cta_studio' || session.extractedLead.tipoAtendimento === TIPO_STUDIO;
   session.extractedLead.intencaoAtual = 'aguardar_corretor';
   session.extractedLead.estadoAtendimento = 'aguardando_corretor';
-  session.extractedLead.tipoAtendimento = 'Aguardando contato do corretor';
+  if (!preserveStudio) {
+    session.extractedLead.tipoAtendimento = 'Aguardando contato do corretor';
+  }
   session.extractedLead.isComplete = true;
   session.extractedLead.humanRequested = true;
   session.extractedLead.pendingMedia = undefined;
@@ -889,17 +931,25 @@ function applyLaunchSubmenuAction(session: WhatsAppChatSession, lanc: Lancamento
  * Digits 1–4 are submenu actions only once a launch is selected — never the main menu.
  */
 function handleLaunchFollowUp(session: WhatsAppChatSession, lastUserMsg: string, companyName: string): string {
-  const listed = listedLaunches();
+  const fromStudio =
+    session.extractedLead.intencaoAtual === 'cta_studio' || session.extractedLead.tipoAtendimento === TIPO_STUDIO;
+  const listed = fromStudio ? activeStudioLaunches() : listedLaunches();
   const estado = session.extractedLead.estadoAtendimento;
   const selected =
     listed.find((item) => item.id === session.extractedLead.selectedLancamentoId) ||
     getActiveLancamentos().find((item) => item.id === session.extractedLead.selectedLancamentoId);
 
   if (listed.length === 0) {
-    if (parseLaunchSubmenuAction(lastUserMsg) === 'consultor' || normalizeMenuChoice(lastUserMsg) === '1') {
+    const menuDigit = normalizeMenuChoice(lastUserMsg);
+    const consultorAction = parseLaunchSubmenuAction(lastUserMsg) === 'consultor';
+    // Studio list: a digit never calls the broker. General empty catalog keeps option 1 / consultor.
+    const handoff = fromStudio
+      ? consultorAction && menuDigit === null
+      : consultorAction || menuDigit === '1';
+    if (handoff) {
       return handoffToConsultor(session, companyName);
     }
-    return buildLancamentosListingMessage(companyName);
+    return fromStudio ? buildStudioListingMessage(companyName) : buildLancamentosListingMessage(companyName);
   }
 
   if (estado === 'lancamento_selecionado' && selected) {
@@ -932,58 +982,290 @@ function handleLaunchFollowUp(session: WhatsAppChatSession, lastUserMsg: string,
   return buildLaunchSubmenu(picked);
 }
 
-export function classifyIntent(text: string): 'aguardar_corretor' | 'lancamentos_na_planta' | 'imoveis_prontos' | 'duvida' | 'atendimento_humano' | null {
-  const menu = normalizeMenuChoice(text);
-  const t = (text || '').toLowerCase().trim();
+function pushTrail(session: WhatsAppChatSession, step: string): void {
+  if (!Array.isArray(session.extractedLead.trilhaNavegacao)) {
+    session.extractedLead.trilhaNavegacao = [];
+  }
+  if (!session.extractedLead.trilhaNavegacao.includes(step)) {
+    session.extractedLead.trilhaNavegacao.push(step);
+  }
+}
 
-  // Atendimento humano
+function applyCtaMarkers(session: WhatsAppChatSession, intent: 'cta_studio' | 'cta_planta'): void {
+  session.extractedLead.intencaoAtual = intent;
+  session.extractedLead.isComplete = false;
+  session.extractedLead.humanRequested = false;
+  if (session.status !== 'dispatched') {
+    session.status = 'active';
+    session.technicalValidationPassed = false;
+  }
+  if (intent === 'cta_studio') {
+    session.extractedLead.tipoAtendimento = TIPO_STUDIO;
+    pushTrail(session, TRAIL_STUDIO);
+    return;
+  }
+  session.extractedLead.tipoAtendimento = TIPO_PLANTA;
+  pushTrail(session, TRAIL_PLANTA);
+}
+
+function activeStudioLaunches(): Lancamento[] {
+  return sortStudioLaunches(getActiveLancamentos()).slice(0, LISTED_LAUNCH_LIMIT);
+}
+
+function buildStudioListingMessage(companyName: string): string {
+  const items = activeStudioLaunches();
+  if (!items.length) {
+    return (
+      `No momento não há opções de studio cadastradas na *${companyName}* ` +
+      `(MO.dO Copa Posto 4, Sansa Living, Guima ou tipologias studio).\n\n` +
+      `Se quiser, diga *consultor* que eu peço para alguém da equipe continuar com você.`
+    );
+  }
+  const cards = items.map((item, index) => formatStudioOptionCard(item, index));
+  return (
+    `Estas são as opções de *studio* cadastradas na *${companyName}*:\n\n` +
+    `${cards.join('\n\n')}\n\n` +
+    `Responda com o *número* ou o *nome* para abrir fotos, informações e book. ` +
+    `O consultor entra só se você escolher *4* ou pedir para falar com ele.`
+  );
+}
+
+function presentStudioOptions(session: WhatsAppChatSession, companyName: string): string {
+  applyCtaMarkers(session, 'cta_studio');
+  session.extractedLead.estadoAtendimento = 'studios_apresentados';
+  session.extractedLead.pendingMedia = undefined;
+  session.extractedLead.produtoImovel = session.extractedLead.produtoImovel || 'Studio';
+  pushTrail(session, TRAIL_STUDIO_LIST);
+  return buildStudioListingMessage(companyName);
+}
+
+/**
+ * Studio list uses the same submenu as lançamentos once a card is picked.
+ * Digits choose a card here — they are not the main menu and not the broker.
+ */
+function handleStudioFollowUp(session: WhatsAppChatSession, lastUserMsg: string, companyName: string): string {
+  const listed = activeStudioLaunches();
+  // Digits pick a card. Only the word "consultor" (not "4") hands off from the list.
+  const askedConsultor =
+    parseLaunchSubmenuAction(lastUserMsg) === 'consultor' && normalizeMenuChoice(lastUserMsg) === null;
+  if (askedConsultor) {
+    return handoffToConsultor(session, companyName);
+  }
+  if (!listed.length) {
+    return buildStudioListingMessage(companyName);
+  }
+  if (matchesStudioCtaOnly(lastUserMsg)) {
+    return buildStudioListingMessage(companyName);
+  }
+  const byNumber = matchLaunchByNumber(lastUserMsg, listed);
+  const byName = matchLaunchByName(lastUserMsg, listed);
+  const pickedId = byNumber?.id || byName?.id;
+  const picked = pickedId ? listed.find((item) => item.id === pickedId) : undefined;
+  if (!picked) {
+    const asNumber = (lastUserMsg || '').trim().replace(/\uFE0F|\u20E3/g, '');
+    if (/^\d{1,2}$/.test(asNumber)) {
+      return `Não encontrei o número ${asNumber}. Responda de *1* a *${listed.length}*, ou com o nome do studio.`;
+    }
+    return `Me diga o *número* (1 a ${listed.length}) ou o *nome* do studio para abrir fotos, informações e book.`;
+  }
+  selectLaunch(session, picked);
+  return buildLaunchSubmenu(picked);
+}
+
+function matchesStudioCtaOnly(text: string): boolean {
+  const normalized = normalizeCtaText(text);
+  return /^(quero\s+)?(um\s+|uma\s+|o\s+|a\s+)?(studio|estudio)s?$/.test(normalized);
+}
+
+function isPlantaFreeAnswerTurn(session: WhatsAppChatSession, messageText: string): boolean {
+  if (!hasConfirmedContact(session)) return false;
+  const estado = session.extractedLead.estadoAtendimento || '';
+  if (estado === 'coletando_planta' || estado === 'planta_concluido') return false;
+  if (estado === 'studios_apresentados' || isLaunchBrowseState(estado)) return false;
   if (
-    /(falar\s+com\s+(uma?\s+)?(pessoa|humano|atendente|corretor|consultor)|atendente\s+humano|quero\s+(um\s+)?humano|passa\s+pro?\s+(atendente|humano|corretor)|pessoa\s+de\s+verdade)/i.test(t) ||
-    t === '5'
+    isPlantaAdvanceMessage(messageText) &&
+    (estado === 'planta_duvidas' || session.extractedLead.intencaoAtual === 'cta_planta')
   ) {
-    return 'atendimento_humano';
+    return false;
+  }
+  const incoming = classifyIntent(messageText);
+  if (incoming === 'cta_planta') return true;
+  if (estado === 'planta_duvidas' && session.extractedLead.intencaoAtual === 'cta_planta') {
+    if (
+      incoming === 'cta_studio' ||
+      incoming === 'lancamentos_na_planta' ||
+      incoming === 'imoveis_prontos' ||
+      incoming === 'aguardar_corretor' ||
+      incoming === 'atendimento_humano'
+    ) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function beginPlantaQuestionFlow(session: WhatsAppChatSession): void {
+  applyCtaMarkers(session, 'cta_planta');
+  session.extractedLead.estadoAtendimento = 'planta_duvidas';
+  session.extractedLead.pendingMedia = undefined;
+  if (!session.extractedLead.produtoImovel) {
+    session.extractedLead.produtoImovel = 'Compra de imóvel na planta';
+  }
+  pushTrail(session, TRAIL_PLANTA_QA);
+}
+
+function buildPlantaFreeAnswerPrompt(session: WhatsAppChatSession, companyName: string): string {
+  const nome = session.name && session.name !== 'Cliente' ? session.name : 'o cliente';
+  return `Você é a assistente virtual da ${companyName}. ${nome} já confirmou nome e telefone e quer entender a compra de imóvel na planta.
+
+Responda em português, curto e direto, somente sobre:
+- fluxo de pagamento
+- entrada
+- parcelas durante a obra
+- financiamento na entrega
+- INCC
+- prazos
+
+Regras:
+- Não invente valores, percentuais, taxas de INCC, número de parcelas, metragem ou prazo de obra.
+- Se o número não estiver escrito no catálogo autorizado abaixo, diga "${SOB_CONSULTA}" e que o consultor confirma.
+- Pode citar previsão de entrega ou condição comercial somente quando o texto já existir no catálogo, sem completar o que faltar.
+- Não peça nome nem telefone de novo.
+- Não diga que o atendimento foi encaminhado, encerrado ou que o consultor já vai chamar.
+- Faça no máximo uma pergunta depois da resposta.
+- Se a última mensagem for só confirmação de contato (sim, ok), explique o fluxo de pagamento na planta sem pedir nome ou telefone de novo.
+- Se a pessoa não tiver outra dúvida, peça para responder SEGUIR para anotar orçamento, prazo, se vai financiar e bairro de preferência.
+
+CATÁLOGO AUTORIZADO:
+${formatLancamentosForPrompt()}`;
+}
+
+function buildPlantaScriptedAnswer(question: string): string {
+  // TODO: entrada, parcelas, INCC e prazos numéricos não estão no catálogo como regra geral.
+  // Explicar o fluxo sem inventar percentual, valor, índice ou data.
+  const q = normalizeCtaText(question);
+  let body =
+    `Na compra na planta o pagamento costuma seguir três etapas: *entrada*, *parcelas durante a obra* e o *saldo na entrega*, que pode ir para *financiamento*. ` +
+    `As parcelas da obra podem ser reajustadas por *INCC*, e o *prazo* depende de cada empreendimento. ` +
+    `Os números (percentual, valor, índice e data) ficam *${SOB_CONSULTA}* com o consultor.`;
+  if (/\bentrada\b/.test(q)) {
+    body = `A *entrada* é a parte paga no início do contrato. O percentual e o valor deste empreendimento ficam *${SOB_CONSULTA}*.`;
+  } else if (/parcela|durante a obra|obra/.test(q)) {
+    body = `As *parcelas durante a obra* cobrem o período até a entrega. Quantidade, valor e índice de correção ficam *${SOB_CONSULTA}*.`;
+  } else if (/financi/.test(q)) {
+    body = `O *financiamento na entrega* vale para o saldo que não foi pago durante a obra. Aprovação e condições do banco ficam *${SOB_CONSULTA}*.`;
+  } else if (/\bincc\b/.test(q)) {
+    body = `O *INCC* é o índice usado para reajustar o saldo durante a obra. Como ele entra neste contrato fica *${SOB_CONSULTA}*.`;
+  } else if (/prazo|entrega|quando/.test(q)) {
+    body = `O *prazo* de obra e a previsão de entrega mudam por empreendimento. Quando o catálogo não traz a data, ela fica *${SOB_CONSULTA}*.`;
+  } else if (/pagamento|fluxo|como funciona|condic/.test(q)) {
+    body =
+      `O *fluxo de pagamento* na planta normalmente é entrada, parcelas durante a obra e saldo na entrega (financiado ou não). ` +
+      `Percentuais e valores ficam *${SOB_CONSULTA}*.`;
+  }
+  return (
+    `${body}\n\n` +
+    `Posso detalhar entrada, parcelas durante a obra, financiamento na entrega, INCC ou prazos. ` +
+    `Quando terminar, responda *SEGUIR* para eu anotar orçamento, prazo, financiamento e bairro.`
+  );
+}
+
+function cleanPlantaAnswer(text: string): string {
+  const trimmed = (text || '').trim().replace(/\s+/g, ' ');
+  if (!trimmed || normalizeMenuChoice(trimmed) === '1' || normalizeCtaText(trimmed) === '1') return '';
+  return trimmed.slice(0, 80);
+}
+
+function parseTimelineAnswer(text: string): string {
+  const lower = normalizeCtaText(text);
+  if (!lower) return '';
+  if (/\b(imediato|agora|este mes)\b/.test(lower)) return 'Imediato';
+  if (/6\s*meses|ate\s*6/.test(lower)) return 'Até 6 meses';
+  if (/1\s*ano|um\s*ano|12\s*meses/.test(lower)) return 'Até 1 ano';
+  if (/ainda nao|nao sei|nao defini|sem prazo/.test(lower)) return 'Ainda não defini';
+  return '';
+}
+
+function parseFinanceAnswer(text: string): string {
+  const lower = normalizeCtaText(text);
+  if (!lower) return '';
+  if (/^(nao|não)$/.test((text || '').trim().toLowerCase()) || /\b(nao vou|sem financiamento|a vista|avista|recursos proprios)\b/.test(lower)) {
+    return 'Não vai financiar';
+  }
+  if (/ainda nao|nao sei|nao decidi|talvez/.test(lower)) return 'Ainda não decidiu';
+  if (/^(sim|s)$/.test(lower) || /\b(financi\w*|vou financiar|com financiamento)\b/.test(lower)) return 'Sim, vai financiar';
+  return '';
+}
+
+function fillCurrentPlantaSlot(
+  info: NonNullable<WhatsAppChatSession['extractedLead']['informacoesColetadas']>,
+  text: string
+): void {
+  const parsed = extractCollectedInfo(text, { ...info });
+  if (!info.faixaValor) {
+    info.faixaValor = parsed.faixaValor || cleanPlantaAnswer(text);
+    return;
+  }
+  if (!info.prazo) {
+    info.prazo = parsed.prazo || parseTimelineAnswer(text) || cleanPlantaAnswer(text);
+    return;
+  }
+  if (!info.formaPagamento) {
+    info.formaPagamento = parsed.formaPagamento || parseFinanceAnswer(text) || cleanPlantaAnswer(text);
+    return;
+  }
+  if (!info.regiao) {
+    info.regiao = parsed.regiao || cleanPlantaAnswer(text);
+  }
+}
+
+function advancePlantaQualification(session: WhatsAppChatSession, text: string, companyName: string): string {
+  applyCtaMarkers(session, 'cta_planta');
+  session.extractedLead.estadoAtendimento = 'coletando_planta';
+  const info = { ...(session.extractedLead.informacoesColetadas || {}) };
+  const kickoff = isPlantaAdvanceMessage(text) || classifyIntent(text) === 'cta_planta';
+  if (!kickoff) fillCurrentPlantaSlot(info, text);
+  session.extractedLead.informacoesColetadas = info;
+
+  if (!info.faixaValor) {
+    return (
+      `Para o consultor já receber seu perfil de compra na planta, qual *faixa de orçamento* você considera?\n\n` +
+      `• Até R$ 300 mil\n` +
+      `• De R$ 300 mil a R$ 500 mil\n` +
+      `• De R$ 500 mil a R$ 800 mil\n` +
+      `• Acima de R$ 800 mil\n` +
+      `• Ainda não defini`
+    );
+  }
+  if (!info.prazo) {
+    return (
+      `Qual é o *prazo* em que você pretende comprar?\n\n` +
+      `• Imediato\n` +
+      `• Até 6 meses\n` +
+      `• Até 1 ano\n` +
+      `• Ainda não defini`
+    );
+  }
+  if (!info.formaPagamento) {
+    return `Você pretende *financiar* o saldo na entrega?\n\n• Sim, vou financiar\n• Não\n• Ainda não decidi`;
+  }
+  if (!info.regiao) {
+    return `Qual *bairro ou região* você prefere?`;
   }
 
-  // Aguardar corretor
-  if (
-    menu === '1' ||
-    t === '1' ||
-    /^(1|aguard(o|ar)(\s+o?\s*contato)?|pode\s+pedir\s+para\s+o\s+corretor\s+me\s+chamar|s[oó] isso|pode\s+chamar|valeu|obrigad[oa])\.?$/i.test(t) ||
-    /aguard(ar|o)\s+(o\s+)?(contato|consultor|corretor)/i.test(t)
-  ) {
-    return 'aguardar_corretor';
-  }
-
-  // Lançamentos na planta
-  if (
-    menu === '2' ||
-    t === '2' ||
-    /\b(lan[çc]amento(s)?|na\s+planta|em\s+constru[çc][ãa]o|apartamento(s)?\s+novo(s)?|novos)\b/i.test(t) ||
-    /conhecer\s+lan[çc]amentos/i.test(t)
-  ) {
-    return 'lancamentos_na_planta';
-  }
-
-  // Imóveis prontos
-  if (
-    menu === '3' ||
-    t === '3' ||
-    /\b(im[oó]ve(l|is)\s+pronto(s)?|comprar|alugar|procurando\s+(uma?\s+)?casa|apartamento\s+pronto|buscar\s+im[oó]veis)\b/i.test(t)
-  ) {
-    return 'imoveis_prontos';
-  }
-
-  // Dúvida
-  if (
-    menu === '4' ||
-    t === '4' ||
-    /^(4|d[uú]vida|tirar\s+uma?\s+d[uú]vida|pergunt(a|ar)|aceita\s+financiamento|informa[çc][õo]es)\b/i.test(t) ||
-    (t.endsWith('?') && t.length > 5)
-  ) {
-    return 'duvida';
-  }
-
-  return null;
+  session.extractedLead.estadoAtendimento = 'planta_concluido';
+  session.extractedLead.isComplete = true;
+  session.extractedLead.humanRequested = true;
+  session.extractedLead.produtoImovel =
+    `Compra na planta — orçamento ${info.faixaValor}; prazo ${info.prazo}; financiamento ${info.formaPagamento}; bairro ${info.regiao}`;
+  pushTrail(session, TRAIL_PLANTA_PROFILE);
+  const nome = session.name && session.name !== 'Cliente' ? `, ${session.name}` : '';
+  return (
+    `Perfeito${nome}. Seu nome e telefone já estão confirmados. ` +
+    `Anotei orçamento *${info.faixaValor}*, prazo *${info.prazo}*, financiamento *${info.formaPagamento}* e bairro *${info.regiao}*.\n\n` +
+    `Vou pedir para um consultor da ${companyName} continuar com você por aqui.`
+  );
 }
 
 export function extractCollectedInfo(
@@ -995,6 +1277,7 @@ export function extractCollectedInfo(
     faixaValor?: string;
     quantidadeQuartos?: string;
     formaPagamento?: string;
+    prazo?: string;
     duvidaTexto?: string;
   } = {}
 ) {
@@ -1089,7 +1372,13 @@ export function extractCollectedInfo(
     }
   }
 
-  // 6. Forma de pagamento
+  // 6. Prazo / timeline (compra na planta)
+  if (!updated.prazo) {
+    const timeline = parseTimelineAnswer(t);
+    if (timeline) updated.prazo = timeline;
+  }
+
+  // 7. Forma de pagamento
   if (!updated.formaPagamento) {
     if (/\b([àa]\s*vista|recursos\s*pr[oó]prios)\b/i.test(lower)) {
       updated.formaPagamento = 'à vista';
@@ -1121,6 +1410,7 @@ function buildSystemPrompt(session: WhatsAppChatSession, companyName: string = '
   if (info.quantidadeQuartos) infoList.push(`Quartos/Tamanho: ${info.quantidadeQuartos}`);
   if (info.faixaValor) infoList.push(`Faixa de Valor: ${info.faixaValor}`);
   if (info.formaPagamento) infoList.push(`Forma de Pagamento: ${info.formaPagamento}`);
+  if (info.prazo) infoList.push(`Prazo: ${info.prazo}`);
   if (info.duvidaTexto) infoList.push(`Dúvida Registrada: ${info.duvidaTexto}`);
   const informacoesColetadas = infoList.length > 0 ? infoList.join(' | ') : 'Nenhuma informação específica fornecida ainda';
 
@@ -1346,9 +1636,46 @@ function getFallbackReply(
     );
   }
 
+  // Studio list: a number or name opens the existing launch submenu. Lone "1" is card 1.
+  if (session.extractedLead.estadoAtendimento === 'studios_apresentados') {
+    return handleStudioFollowUp(session, lastUserMsg, companyName);
+  }
+
   // Launch list / submenu: digits select a card or a submenu action, not the main menu.
   if (isLaunchBrowseState(session.extractedLead.estadoAtendimento)) {
     return handleLaunchFollowUp(session, lastUserMsg, companyName);
+  }
+
+  if (
+    session.extractedLead.estadoAtendimento === 'coletando_planta' ||
+    (session.extractedLead.estadoAtendimento === 'planta_duvidas' && isPlantaAdvanceMessage(lastUserMsg))
+  ) {
+    const switching = classifyIntent(lastUserMsg);
+    const leavingPlanta =
+      session.extractedLead.estadoAtendimento === 'coletando_planta' &&
+      (switching === 'cta_studio' ||
+        switching === 'lancamentos_na_planta' ||
+        switching === 'imoveis_prontos' ||
+        switching === 'atendimento_humano');
+    if (!leavingPlanta) {
+      return advancePlantaQualification(session, lastUserMsg, companyName);
+    }
+  }
+
+  if (session.extractedLead.estadoAtendimento === 'planta_duvidas' && !isPlantaAdvanceMessage(lastUserMsg)) {
+    const leavePlanta = classifyIntent(lastUserMsg);
+    const loneOne = normalizeMenuChoice(lastUserMsg) === '1';
+    if (
+      loneOne ||
+      (leavePlanta !== 'cta_studio' &&
+        leavePlanta !== 'lancamentos_na_planta' &&
+        leavePlanta !== 'imoveis_prontos' &&
+        leavePlanta !== 'atendimento_humano' &&
+        leavePlanta !== 'aguardar_corretor')
+    ) {
+      beginPlantaQuestionFlow(session);
+      return buildPlantaScriptedAnswer(lastUserMsg);
+    }
   }
 
   // Ensure extracted property code & link are up to date
@@ -1363,13 +1690,36 @@ function getFallbackReply(
   session.extractedLead.informacoesColetadas = extractCollectedInfo(lastUserMsg, session.extractedLead.informacoesColetadas);
   const info = session.extractedLead.informacoesColetadas || {};
 
-  // Check intent detection
+  // Check intent detection. Studio / planta stay sticky while their flow is open,
+  // so a follow-up question is not reclassified as a generic dúvida.
   const detectedIntent = classifyIntent(lastUserMsg);
-  if (detectedIntent) {
+  const estadoAtual = session.extractedLead.estadoAtendimento || '';
+  const stickyCta =
+    (session.extractedLead.intencaoAtual === 'cta_studio' || session.extractedLead.intencaoAtual === 'cta_planta') &&
+    stateBlocksLoneMenuOne(estadoAtual);
+  const switchingAway =
+    detectedIntent === 'cta_studio' ||
+    detectedIntent === 'cta_planta' ||
+    detectedIntent === 'lancamentos_na_planta' ||
+    detectedIntent === 'imoveis_prontos' ||
+    detectedIntent === 'atendimento_humano' ||
+    (detectedIntent === 'aguardar_corretor' && normalizeMenuChoice(lastUserMsg) !== '1');
+  if (detectedIntent && (!stickyCta || switchingAway)) {
     session.extractedLead.intencaoAtual = detectedIntent;
   }
 
   const currentIntent = session.extractedLead.intencaoAtual;
+
+  // Studio CTA — list catalog options, then the existing launch submenu.
+  if (currentIntent === 'cta_studio') {
+    return presentStudioOptions(session, companyName);
+  }
+
+  // Off-plan CTA when Gemini did not answer this turn.
+  if (currentIntent === 'cta_planta') {
+    beginPlantaQuestionFlow(session);
+    return buildPlantaScriptedAnswer(lastUserMsg);
+  }
 
   // 3. Hand off to human (FLUXO 5)
   if (currentIntent === 'atendimento_humano' || isHumanReq) {
@@ -1381,8 +1731,11 @@ function getFallbackReply(
     return `Claro. Vou encaminhar seu atendimento para um consultor da ${companyName}. Ele continuará o contato com você e terá acesso às informações já registradas.`;
   }
 
-  // 4. Aguardar corretor (FLUXO 1)
-  if (currentIntent === 'aguardar_corretor') {
+  // 4. Aguardar corretor (FLUXO 1). Lone "1" inside a catalog list or open CTA does not dispatch.
+  if (
+    currentIntent === 'aguardar_corretor' &&
+    !(normalizeMenuChoice(lastUserMsg) === '1' && stateBlocksLoneMenuOne(session.extractedLead.estadoAtendimento))
+  ) {
     session.extractedLead.intencaoAtual = 'aguardar_corretor';
     session.extractedLead.estadoAtendimento = 'aguardando_corretor';
     session.extractedLead.tipoAtendimento = 'Aguardando contato do corretor';
@@ -1627,7 +1980,15 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
 
   // Se o telefone foi fornecido/confirmado e o tipo ainda não foi definido:
   if (!tipo && hasValidPhone && userMessages.length >= 2) {
-    if (isExplicitCloseRequest(lastUserMsg)) {
+    const lastIntent = classifyIntent(lastUserMsg);
+    const browsing = stateBlocksLoneMenuOne(session.extractedLead.estadoAtendimento);
+    if (session.extractedLead.intencaoAtual === 'cta_studio' || lastIntent === 'cta_studio') {
+      tipo = TIPO_STUDIO;
+      pushTrail(session, TRAIL_STUDIO);
+    } else if (session.extractedLead.intencaoAtual === 'cta_planta' || lastIntent === 'cta_planta') {
+      tipo = TIPO_PLANTA;
+      pushTrail(session, TRAIL_PLANTA);
+    } else if (isExplicitCloseRequest(lastUserMsg) && !browsing) {
       tipo = 'Aguardando contato do corretor';
       session.extractedLead.humanRequested = true;
       if (!session.extractedLead.trilhaNavegacao.includes('Optou por aguardar contato direto do corretor')) {
@@ -1650,7 +2011,13 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
       }
     }
   } else if (!tipo) {
-    if (/\blan[çc]amento(s)?\b|na planta|em constru[çc][ãa]o/i.test(userText)) {
+    if (session.extractedLead.intencaoAtual === 'cta_studio' || classifyIntent(userText) === 'cta_studio') {
+      tipo = TIPO_STUDIO;
+      pushTrail(session, TRAIL_STUDIO);
+    } else if (session.extractedLead.intencaoAtual === 'cta_planta' || classifyIntent(userText) === 'cta_planta') {
+      tipo = TIPO_PLANTA;
+      pushTrail(session, TRAIL_PLANTA);
+    } else if (/\blan[çc]amento(s)?\b|na planta|em constru[çc][ãa]o/i.test(userText)) {
       tipo = 'Lançamento na Planta';
     } else if (/\bcompr(ar|a|o)?\b/i.test(userText)) {
       tipo = 'Comprar Imóvel Pronto';
@@ -1659,16 +2026,21 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     }
   }
 
-  // 5. Detect Launch or Property mentioned in text
-  for (const l of activeLanc) {
-    if (userText.toLowerCase().includes(l.nome.toLowerCase())) {
-      selectedLancNome = l.nome;
-      selectedLancId = l.id;
-      produto = `Lançamento ${l.nome} (${l.tipologias})`;
-      if (!session.extractedLead.trilhaNavegacao.includes(`Empreendimento: ${l.nome}`)) {
-        session.extractedLead.trilhaNavegacao.push(`Empreendimento: ${l.nome}`);
+  // 5. Detect Launch or Property mentioned in text.
+  // Keep an already chosen studio card and the off-plan profile line for the dossier.
+  const keepProduct =
+    Boolean(session.extractedLead.selectedLancamentoId) || produto.startsWith('Compra na planta');
+  if (!keepProduct) {
+    for (const l of activeLanc) {
+      if (userText.toLowerCase().includes(l.nome.toLowerCase())) {
+        selectedLancNome = l.nome;
+        selectedLancId = l.id;
+        produto = `Lançamento ${l.nome} (${l.tipologias})`;
+        if (!session.extractedLead.trilhaNavegacao.includes(`Empreendimento: ${l.nome}`)) {
+          session.extractedLead.trilhaNavegacao.push(`Empreendimento: ${l.nome}`);
+        }
+        break;
       }
-      break;
     }
   }
 
@@ -1720,15 +2092,17 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
 
   const lastMsg = userMessages[userMessages.length - 1]?.content || '';
   const currentEstado = session.extractedLead.estadoAtendimento;
-  const inLaunchPicker = isLaunchBrowseState(currentEstado);
+  const inLaunchPicker = isLaunchBrowseState(currentEstado) || currentEstado === 'studios_apresentados';
+  const blocksLoneOne = stateBlocksLoneMenuOne(currentEstado);
   // Bare "1" inside the launch list/submenu is Fotos or card #1, not "aguardar corretor".
-  const explicitClose = isExplicitCloseRequest(lastMsg) && !inLaunchPicker;
+  const explicitClose = isExplicitCloseRequest(lastMsg) && !blocksLoneOne;
   const info = session.extractedLead.informacoesColetadas || {};
 
   const currentIntent = session.extractedLead.intencaoAtual || detectedIntent;
 
   const isBrokerOrHumanIntent = Boolean(
     !inLaunchPicker &&
+      !blocksLoneOne &&
       (
         currentIntent === 'aguardar_corretor' ||
         currentIntent === 'atendimento_humano' ||
@@ -1748,6 +2122,8 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
       (Boolean(info.duvidaTexto) && normalizeMenuChoice(lastMsg) !== '4' && currentEstado === 'respondendo_duvida')
   );
 
+  const isPlantaComplete = currentEstado === 'planta_concluido';
+
   // Do not treat "3 messages + a property URL" as a finished lead.
   // Option 2/3/4 must deliver their step before any dispatch.
   const lastMenu = normalizeMenuChoice(lastMsg);
@@ -1760,12 +2136,14 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     hasValidPhone &&
       hasConfirmedContact(session) &&
       !inLaunchPicker &&
+      !blocksLoneOne &&
       !blockedMenuTurn &&
       (
         isBrokerOrHumanIntent ||
         isLancamentosComplete ||
         isProntosComplete ||
-        isDuvidaComplete
+        isDuvidaComplete ||
+        isPlantaComplete
       )
   );
 
@@ -2031,13 +2409,19 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
 
   // Menu 2/3/4 and open collection stay on the dialog state machine so Gemini
   // cannot close the lead in the same turn as the menu choice.
+  // cta_planta questions use the same Gemini call with a focused prompt.
+  const plantaFreeAnswer = !replyText && isPlantaFreeAnswerTurn(session, messageText);
+  if (plantaFreeAnswer) beginPlantaQuestionFlow(session);
+
   const aiClient = getGeminiClient();
-  const forceStateMachine = !replyText && shouldUseDialogStateMachine(session, messageText);
+  const forceStateMachine = !replyText && !plantaFreeAnswer && shouldUseDialogStateMachine(session, messageText);
 
   if (forceStateMachine) {
     replyText = getFallbackReply(session, companyName);
   } else if (!replyText && hasConfirmedContact(session) && aiClient) {
-    const systemInstruction = buildSystemPrompt(session, companyName);
+    const systemInstruction = plantaFreeAnswer
+      ? buildPlantaFreeAnswerPrompt(session, companyName)
+      : buildSystemPrompt(session, companyName);
     const contents = session.messages.map((m) => ({
       role: m.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: m.content }],
@@ -2066,6 +2450,11 @@ export async function handleIncomingWhatsAppMessage(event: IncomingWhatsAppMessa
 
   if (!replyText) {
     replyText = getFallbackReply(session, companyName);
+  }
+
+  if (plantaFreeAnswer && replyText && !/seguir/i.test(replyText)) {
+    replyText +=
+      `\n\nSe não tiver outra dúvida, responda *SEGUIR* para eu anotar orçamento, prazo, financiamento e bairro.`;
   }
 
   // Guarda de encerramento sem telefone: se o telefone ainda não foi capturado, não permitir que a IA finalize sem pedir telefone
