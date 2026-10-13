@@ -3,15 +3,23 @@
  * Run: npm run check:cta
  * Does not boot WhatsApp or read .env / .whatsapp_auth.
  */
+import { formatPhoneForDisplay, isValidPhoneNumber } from '../broker-roleta.ts';
 import {
+  buildContactConfirmationPrompt,
   classifyIntent,
   formatStudioOptionCard,
+  isContactConfirmationReply,
   isNamedStudioLaunch,
   isPlantaAdvanceMessage,
+  isPrematureDispatchTurn,
   isStudioCatalogItem,
+  isUndispatchedRecoveryCandidate,
+  nextContactConfirmationStep,
+  resolveContactDisplayName,
   sortStudioLaunches,
   stateBlocksLoneMenuOne,
   SOB_CONSULTA,
+  type ContactConfirmationStep,
   type StudioCatalogFields,
 } from '../whatsapp-cta.ts';
 
@@ -131,6 +139,119 @@ const hiddenPrice = formatStudioOptionCard(
 );
 check('unpublished price stays sob consulta', hiddenPrice.includes(SOB_CONSULTA) && !hiddenPrice.includes('999'), true);
 check('unpublished size stays sob consulta', !hiddenPrice.includes('40m²'), true);
+
+const consultorHandoff = {
+  extractedLead: { humanRequested: true, estadoAtendimento: 'aguardando_corretor' as const },
+};
+check('submenu 4 dispatches', isPrematureDispatchTurn(consultorHandoff, '4'), false);
+check(
+  'submenu 4 still dispatches if validation rewrote the state',
+  isPrematureDispatchTurn({ extractedLead: { humanRequested: true, estadoAtendimento: 'qualificado' } }, '4'),
+  false
+);
+check(
+  'studio handoff dispatches',
+  isPrematureDispatchTurn({ humanRequested: true, extractedLead: { estadoAtendimento: 'aguardando_corretor' } }, '4'),
+  false
+);
+check(
+  'planta handoff dispatches',
+  isPrematureDispatchTurn({ extractedLead: { humanRequested: true, estadoAtendimento: 'planta_concluido' } }, 'Copacabana'),
+  false
+);
+check(
+  'lone 1 does not dispatch',
+  isPrematureDispatchTurn({ extractedLead: { humanRequested: false, estadoAtendimento: 'lancamentos_apresentados' } }, '1'),
+  true
+);
+check(
+  'lone 1 on the launch submenu does not dispatch',
+  isPrematureDispatchTurn({ extractedLead: { humanRequested: false, estadoAtendimento: 'lancamento_selecionado' } }, '1'),
+  true
+);
+check(
+  'menu 4 outside a handoff does not dispatch',
+  isPrematureDispatchTurn({ extractedLead: { humanRequested: false, estadoAtendimento: 'menu_inicial' } }, '4'),
+  true
+);
+check(
+  'menu 2 outside a handoff does not dispatch',
+  isPrematureDispatchTurn({ extractedLead: { humanRequested: false, estadoAtendimento: 'menu_inicial' } }, '2'),
+  true
+);
+
+check(
+  'qualified lead with no dispatch is recovered',
+  isUndispatchedRecoveryCandidate({ status: 'qualified', extractedLead: { humanRequested: false } }),
+  true
+);
+check(
+  'humanRequested lead with no dispatch is recovered',
+  isUndispatchedRecoveryCandidate({ status: 'active', humanRequested: true }),
+  true
+);
+check(
+  'already dispatched lead is not sent again',
+  isUndispatchedRecoveryCandidate({
+    status: 'qualified',
+    lastDispatchedAt: '2026-01-01T00:00:00.000Z',
+    extractedLead: { humanRequested: true },
+  }),
+  false
+);
+check(
+  'dispatched status is not sent again',
+  isUndispatchedRecoveryCandidate({ status: 'dispatched', extractedLead: { humanRequested: true } }),
+  false
+);
+
+const typedName = resolveContactDisplayName('Carla Mendes', 'Carla Zap');
+check('typed name wins over pushName', typedName, 'Carla Mendes');
+check('pushName fills in when no typed name', resolveContactDisplayName('Cliente', 'Carla Zap'), 'Carla Zap');
+
+const phone = '5521987654321';
+const formatted = formatPhoneForDisplay(phone);
+const prompt = buildContactConfirmationPrompt(typedName, phone);
+check('confirmation shows the typed name', prompt.includes(typedName), true);
+check('confirmation shows the formatted phone', prompt.includes(formatted), true);
+check('formatted phone is the display form', formatted, '+55 (21) 98765-4321');
+
+const lidPrompt = buildContactConfirmationPrompt(typedName, '');
+check('lid prompt asks for the number', /WhatsApp com DDD/i.test(lidPrompt), true);
+check('lid prompt does not invent a phone', lidPrompt.includes('+55'), false);
+check('lid number is not a real phone', isValidPhoneNumber(''), false);
+
+let asked = false;
+let confirmed = false;
+const simReplies: string[] = [];
+for (const message of ['Oi', 'Sim', 'Sim']) {
+  const step: ContactConfirmationStep = nextContactConfirmationStep({
+    confirmed,
+    asked,
+    hasName: true,
+    hasPhone: true,
+    messageIsConfirmation: isContactConfirmationReply(message),
+    messageIsTypedName: false,
+    messageHasPhone: false,
+  });
+  if (step === 'show_prompt' || step === 'reprompt') {
+    asked = true;
+    simReplies.push(buildContactConfirmationPrompt(typedName, phone));
+  } else if (step === 'confirmed_menu') {
+    asked = true;
+    confirmed = true;
+    simReplies.push('MENU');
+  } else if (step === 'already_confirmed') {
+    simReplies.push('DONE');
+  } else {
+    simReplies.push(step);
+  }
+}
+check('first message is the confirmation', simReplies[0].includes('Confirma seus dados'), true);
+check('Sim confirms', simReplies[1], 'MENU');
+check('Sim confirms without looping', simReplies[2], 'DONE');
+check('plain Sim is a confirmation', isContactConfirmationReply('Sim'), true);
+check('second Sim is not the prompt again', simReplies[2].includes('Confirma seus dados'), false);
 
 if (failed > 0) {
   console.error(`\n${failed} check(s) failed`);

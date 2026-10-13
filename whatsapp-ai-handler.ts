@@ -22,11 +22,17 @@ import {
   Lancamento,
 } from './lancamentos-service';
 import {
+  buildContactConfirmationPrompt as renderContactConfirmationPrompt,
   classifyIntent,
   formatStudioOptionCard,
+  isContactConfirmationReply,
   isPlantaAdvanceMessage,
+  isPrematureDispatchTurn,
+  isUndispatchedRecoveryCandidate,
+  nextContactConfirmationStep,
   normalizeCtaText,
   normalizeMenuChoice,
+  resolveContactDisplayName,
   sortStudioLaunches,
   stateBlocksLoneMenuOne,
   SOB_CONSULTA,
@@ -301,7 +307,7 @@ function isGreetingOnly(text: string): boolean {
     'ola tudo bem',
     'oi tudo bem',
   ];
-  return greetings.includes(t) || t.length <= 3;
+  return greetings.includes(t);
 }
 
 /** True when the message is only a phone number (with optional spaces/punctuation). */
@@ -312,16 +318,6 @@ function isPhoneOnlyMessage(text: string): boolean {
   if (!isValidPhoneNumber(digits) && digits.length < 10) return false;
   const withoutPhoneNoise = t.replace(/[\d\s()+\-.]/g, '');
   return withoutPhoneNoise.length <= 2;
-}
-
-/** Affirmative confirmation (SIM / OK / 👍 etc.) for the early contact step. */
-function isContactConfirmationReply(text: string): boolean {
-  const t = (text || '').trim().toLowerCase().replace(/[!.,]/g, '');
-  if (!t) return false;
-  if (/^(sim|ok|okay|certo|isso|perfeito|pode|pode ser|confirmo|confirmado|correto|exato|beleza|positivo|👍|👍🏻|👍🏼|👍🏽|👍🏾|👍🏿)$/i.test(t)) {
-    return true;
-  }
-  return /\b(sim[,!]?\s*(est[aá]\s*)?(correto|certo|pode)|confirmo|dados?\s*corretos?)\b/i.test(t);
 }
 
 /**
@@ -365,13 +361,9 @@ function propertyContextDiffers(a?: string, b?: string): boolean {
 }
 
 function suggestedDisplayName(session: WhatsAppChatSession): string {
-  if (session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name)) {
-    return session.name;
-  }
-  if (session.pushName && session.pushName !== 'Cliente' && !isGreetingOnly(session.pushName)) {
-    return session.pushName;
-  }
-  return '';
+  const name = resolveContactDisplayName(session.name, session.pushName);
+  if (!name || isGreetingOnly(name)) return '';
+  return name;
 }
 
 function hasConfirmedContact(session: WhatsAppChatSession): boolean {
@@ -460,34 +452,7 @@ function buildWelcomeMessage(session: WhatsAppChatSession, companyName: string):
 }
 
 function buildContactConfirmationPrompt(session: WhatsAppChatSession): string {
-  const nome = suggestedDisplayName(session) || 'seu nome';
-  const hasPhone = isValidPhoneNumber(session.phone);
-  const tel = hasPhone ? formatPhoneForDisplay(session.phone) : 'seu WhatsApp';
-  if (!suggestedDisplayName(session) && !hasPhone) {
-    return (
-      `Para seguirmos, me confirma seu *nome completo* e *WhatsApp com DDD*?\n` +
-      `Pode responder com o nome e o número, ou diga *SIM* se os dados estiverem corretos.`
-    );
-  }
-  if (!suggestedDisplayName(session)) {
-    return (
-      `Confirma seus dados?\n` +
-      `📱 *Telefone:* ${tel}\n\n` +
-      `Responde *SIM* se o telefone está certo, ou me envia seu *nome completo* (e corrija o telefone se precisar).`
-    );
-  }
-  if (!hasPhone) {
-    return (
-      `Confirma seus dados?\n` +
-      `👤 *Nome:* ${nome}\n\n` +
-      `Responde *SIM* e me informe seu *WhatsApp com DDD*, ou corrija o nome se estiver errado.`
-    );
-  }
-  return (
-    `Confirma seus dados?\n` +
-    `👤 *${nome}* · 📱 *${tel}*\n\n` +
-    `Responde *SIM* ou corrija o nome/telefone.`
-  );
+  return renderContactConfirmationPrompt(suggestedDisplayName(session), session.phone);
 }
 
 function buildMenuAfterConfirmation(session: WhatsAppChatSession): string {
@@ -586,47 +551,56 @@ function processContactConfirmationGate(
 
   const hasPhone = isValidPhoneNumber(session.phone);
   const hasNameHint = Boolean(suggestedDisplayName(session));
+  const step = nextContactConfirmationStep({
+    confirmed: false,
+    asked: Boolean(session.contactConfirmationAsked),
+    hasName: hasNameHint,
+    hasPhone,
+    messageIsConfirmation: isContactConfirmationReply(last),
+    messageIsTypedName: looksLikeTypedFullName(last) && !isPhoneOnlyMessage(last),
+    messageHasPhone: Boolean(detectedPhone && isValidPhoneNumber(detectedPhone)),
+  });
 
-  // Affirmative confirmation
-  if (isContactConfirmationReply(last) && hasPhone && hasNameHint) {
+  if (step === 'confirmed_menu') {
     session.extractedLead.nameConfirmed = true;
     session.extractedLead.phoneConfirmed = true;
     session.extractedLead.dadosNaoConfirmados = false;
     session.awaitingContactConfirmation = false;
     session.contactConfirmationAsked = true;
     session.extractedLead.estadoAtendimento = 'menu_inicial';
-    if (!session.extractedLead.trilhaNavegacao.includes('Contato confirmado (nome + telefone)')) {
-      session.extractedLead.trilhaNavegacao.push('Contato confirmado (nome + telefone)');
+    const trail = looksLikeTypedFullName(last)
+      ? 'Nome corrigido e confirmado pelo cliente'
+      : 'Contato confirmado (nome + telefone)';
+    if (!session.extractedLead.trilhaNavegacao.includes(trail)) {
+      session.extractedLead.trilhaNavegacao.push(trail);
     }
     return replyAfterContactConfirmed(session, companyName);
   }
 
-  // User sent a clear full name + we already have phone → treat as correction/confirm
-  if (looksLikeTypedFullName(last) && hasPhone && !isContactConfirmationReply(last) && session.contactConfirmationAsked) {
-    session.extractedLead.nameConfirmed = true;
-    session.extractedLead.phoneConfirmed = true;
-    session.extractedLead.dadosNaoConfirmados = false;
-    session.awaitingContactConfirmation = false;
-    session.extractedLead.estadoAtendimento = 'menu_inicial';
-    if (!session.extractedLead.trilhaNavegacao.includes('Nome corrigido e confirmado pelo cliente')) {
-      session.extractedLead.trilhaNavegacao.push('Nome corrigido e confirmado pelo cliente');
-    }
-    return replyAfterContactConfirmed(session, companyName);
-  }
-
-  // First turn of cycle: welcome + confirmation in one reply
-  if (!session.contactConfirmationAsked) {
+  if (step === 'ask_phone') {
     session.awaitingContactConfirmation = true;
     session.contactConfirmationAsked = true;
     session.extractedLead.estadoAtendimento = 'confirmacao_contato';
-    const welcome = buildWelcomeMessage(session, companyName);
-    const confirm = buildContactConfirmationPrompt(session);
-    return `${welcome}\n\n${confirm}`;
+    const nome = hasNameHint ? `*${suggestedDisplayName(session)}*` : 'seu nome';
+    return `Anotei ${nome}. Me envia agora seu *WhatsApp com DDD* (ex: 21 99999-9999) para eu seguir.`;
   }
 
-  // Still awaiting — re-prompt confirmation (do not open menu)
+  if (step === 'ask_name') {
+    session.awaitingContactConfirmation = true;
+    session.contactConfirmationAsked = true;
+    session.extractedLead.phoneConfirmed = true;
+    session.extractedLead.estadoAtendimento = 'confirmacao_contato';
+    return `O telefone está certo. Me envia seu *nome completo* para eu seguir.`;
+  }
+
   session.awaitingContactConfirmation = true;
-  return buildContactConfirmationPrompt(session);
+  session.contactConfirmationAsked = true;
+  session.extractedLead.estadoAtendimento = 'confirmacao_contato';
+  const confirm = buildContactConfirmationPrompt(session);
+  if (step === 'show_prompt') {
+    return `${buildWelcomeMessage(session, companyName)}\n\n${confirm}`;
+  }
+  return confirm;
 }
 
 function isExplicitCloseRequest(msg: string): boolean {
@@ -698,23 +672,6 @@ function shouldUseDialogStateMachine(session: WhatsAppChatSession, messageText: 
 
 function isLaunchBrowseState(estado?: string): boolean {
   return estado === 'lancamentos_apresentados' || estado === 'lancamento_selecionado';
-}
-
-/** Dispatch is not allowed on the turn that only opens a menu option or is still collecting. */
-function isPrematureDispatchTurn(session: WhatsAppChatSession, lastUserText: string): boolean {
-  const choice = normalizeMenuChoice(lastUserText);
-  const estado = session.extractedLead.estadoAtendimento || '';
-  // Submenu 4 becomes the consultor handoff only after the state machine leaves the launch picker.
-  if (choice === '4' && (estado === 'aguardando_corretor' || estado === 'atendimento_humano')) {
-    return false;
-  }
-  if (choice === '1' && stateBlocksLoneMenuOne(estado)) return true;
-  if (choice === '2' || choice === '3' || choice === '4') return true;
-  if (stateBlocksLoneMenuOne(estado)) return true;
-  if (estado === 'respondendo_duvida' && !session.extractedLead.informacoesColetadas?.duvidaTexto) {
-    return true;
-  }
-  return false;
 }
 
 function buildLancamentosListingMessage(companyName: string): string {
@@ -2275,7 +2232,10 @@ export async function performTechnicalLeadValidation(
     session.technicalValidationPassed = true;
     session.technicalValidationErrors = [];
     session.extractedLead.isComplete = true;
-    session.extractedLead.estadoAtendimento = 'qualificado';
+    const estadoAntes = session.extractedLead.estadoAtendimento;
+    if (estadoAntes !== 'aguardando_corretor' && estadoAntes !== 'atendimento_humano') {
+      session.extractedLead.estadoAtendimento = 'qualificado';
+    }
     scheduleSessionsPersist();
 
     console.log(
@@ -2877,7 +2837,11 @@ async function checkInactiveSessions() {
   const inactivityTimeoutMs = timeoutSec * 1000;
 
   for (const session of sessions.values()) {
-    if (session.status === 'active' && session.messages.length > 0) {
+    if (
+      isUndispatchedRecoveryCandidate(session) &&
+      session.messages.length > 0 &&
+      !activeDispatchTimers.has(session.jid)
+    ) {
       const lastActivityTime = new Date(session.lastActivity).getTime();
       if (now - lastActivityTime >= inactivityTimeoutMs) {
         await extractLeadFromSession(session);

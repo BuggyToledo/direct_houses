@@ -3,6 +3,7 @@
  * Kept out of whatsapp-ai-handler.ts so the classifier can run without
  * booting Baileys, sessions, or the auth directory.
  */
+import { formatPhoneForDisplay, isValidPhoneNumber } from './broker-roleta';
 
 export type AttendanceIntent =
   | 'cta_studio'
@@ -274,4 +275,136 @@ export function formatStudioOptionCard(item: StudioCatalogFields, index: number)
   ]
     .filter(Boolean)
     .join('\n');
+}
+
+/** Typed name wins. pushName is only the fallback when no real name was typed. */
+export function resolveContactDisplayName(sessionName?: string, pushName?: string): string {
+  const name = (sessionName || '').trim();
+  if (name && name !== 'Cliente') return name;
+  const push = (pushName || '').trim();
+  if (push && push !== 'Cliente') return push;
+  return '';
+}
+
+/** Affirmative reply for the single name+phone confirmation step. */
+export function isContactConfirmationReply(text: string): boolean {
+  const t = (text || '').trim().toLowerCase().replace(/[!.,]/g, '');
+  if (!t) return false;
+  if (/^(sim|ok|okay|certo|isso|perfeito|pode|pode ser|confirmo|confirmado|correto|exato|beleza|positivo|👍|👍🏻|👍🏼|👍🏽|👍🏾|👍🏿)$/i.test(t)) {
+    return true;
+  }
+  return /\b(sim[,!]?\s*(est[aá]\s*)?(correto|certo|pode)|confirmo|dados?\s*corretos?)\b/i.test(t);
+}
+
+/**
+ * One confirmation card: name (typed over pushName) and the real phone.
+ * An @lid session has no dialable phone, so the same message asks for it.
+ */
+export function buildContactConfirmationPrompt(displayName: string, phone: string): string {
+  const nome = (displayName || '').trim();
+  const hasPhone = isValidPhoneNumber(phone);
+  const tel = hasPhone ? formatPhoneForDisplay(phone) : '';
+  if (!nome && !hasPhone) {
+    return (
+      `Para seguirmos, me confirma seu *nome completo* e *WhatsApp com DDD*?\n` +
+      `Pode responder com o nome e o número, ou diga *SIM* se os dados estiverem corretos.`
+    );
+  }
+  if (!nome) {
+    return (
+      `Confirma seus dados?\n` +
+      `📱 *Telefone:* ${tel}\n\n` +
+      `Responde *SIM* se o telefone está certo, ou me envia seu *nome completo* (e corrija o telefone se precisar).`
+    );
+  }
+  if (!hasPhone) {
+    return (
+      `Confirma seus dados?\n` +
+      `👤 *Nome:* ${nome}\n\n` +
+      `Não consegui ler um WhatsApp neste contato. Me envia seu *WhatsApp com DDD* nesta mesma resposta, ou diga *SIM* e o número.`
+    );
+  }
+  return (
+    `Confirma seus dados?\n` +
+    `👤 *${nome}* · 📱 *${tel}*\n\n` +
+    `Responde *SIM* ou corrija o nome/telefone.`
+  );
+}
+
+export type ContactConfirmationStep =
+  | 'already_confirmed'
+  | 'show_prompt'
+  | 'confirmed_menu'
+  | 'ask_phone'
+  | 'ask_name'
+  | 'reprompt';
+
+/**
+ * First turn always shows the card. A later plain "Sim" confirms once and
+ * never asks for the same card again.
+ */
+export function nextContactConfirmationStep(input: {
+  confirmed: boolean;
+  asked: boolean;
+  hasName: boolean;
+  hasPhone: boolean;
+  messageIsConfirmation: boolean;
+  messageIsTypedName: boolean;
+  messageHasPhone: boolean;
+}): ContactConfirmationStep {
+  if (input.confirmed) return 'already_confirmed';
+  if (!input.asked) return 'show_prompt';
+  if (input.messageIsConfirmation && input.hasName && input.hasPhone) return 'confirmed_menu';
+  if (input.messageIsTypedName && input.hasPhone) return 'confirmed_menu';
+  if (input.messageHasPhone && input.hasPhone && input.hasName) return 'confirmed_menu';
+  if (input.messageIsConfirmation && !input.hasPhone) return 'ask_phone';
+  if (input.messageIsConfirmation && !input.hasName) return 'ask_name';
+  return 'reprompt';
+}
+
+/**
+ * True when this turn must not call the roleta.
+ * A handoff (humanRequested, including STUDIO submenu 4 and PLANTA) dispatches.
+ * A lone "1" or any menu digit outside a handoff does not.
+ */
+export function isPrematureDispatchTurn(
+  session: {
+    humanRequested?: boolean;
+    extractedLead?: {
+      humanRequested?: boolean;
+      estadoAtendimento?: string;
+      informacoesColetadas?: { duvidaTexto?: string };
+    };
+  },
+  lastUserText: string
+): boolean {
+  if (session.humanRequested || session.extractedLead?.humanRequested) return false;
+  const choice = normalizeMenuChoice(lastUserText);
+  const estado = session.extractedLead?.estadoAtendimento || '';
+  if (choice === '4' && (estado === 'aguardando_corretor' || estado === 'atendimento_humano')) {
+    return false;
+  }
+  if (choice === '1' && stateBlocksLoneMenuOne(estado)) return true;
+  if (choice === '2' || choice === '3' || choice === '4') return true;
+  if (stateBlocksLoneMenuOne(estado)) return true;
+  if (estado === 'respondendo_duvida' && !session.extractedLead?.informacoesColetadas?.duvidaTexto) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Inactivity recovery may send a qualified or human-requested lead that never
+ * reached the roleta. A lead that already has lastDispatchedAt is left alone.
+ */
+export function isUndispatchedRecoveryCandidate(session: {
+  status?: string;
+  lastDispatchedAt?: string;
+  humanRequested?: boolean;
+  extractedLead?: { humanRequested?: boolean };
+}): boolean {
+  if (session.lastDispatchedAt) return false;
+  if (session.status === 'dispatched' || session.status === 'closed') return false;
+  const humanRequested = Boolean(session.humanRequested || session.extractedLead?.humanRequested);
+  return session.status === 'active' || session.status === 'qualified' || humanRequested;
 }
