@@ -59,6 +59,28 @@ type MessageHandler = (event: IncomingWhatsAppMessageEvent) => Promise<void>;
 
 const AUTH_DIR = path.join(process.cwd(), '.whatsapp_auth');
 
+// Guarda as mensagens enviadas para poder reenviá-las quando o celular
+// do destinatário pedir de novo (evita o "Aguardando mensagem" eterno).
+const sentMessageStore = new Map<string, any>();
+function rememberSentMessage(sent: any) {
+  try {
+    if (sent?.key?.id && sent?.message) {
+      sentMessageStore.set(sent.key.id, sent.message);
+      if (sentMessageStore.size > 2000) {
+        const first = sentMessageStore.keys().next().value;
+        if (first) sentMessageStore.delete(first);
+      }
+    }
+  } catch { /* ignora */ }
+}
+const msgRetryCounterMap = new Map<string, number>();
+const msgRetryCounterCache = {
+  get: (k: string) => msgRetryCounterMap.get(k),
+  set: (k: string, v: number) => { msgRetryCounterMap.set(k, v); if (msgRetryCounterMap.size > 5000) msgRetryCounterMap.clear(); },
+  del: (k: string) => { msgRetryCounterMap.delete(k); },
+  flushAll: () => msgRetryCounterMap.clear(),
+};
+
 class WhatsAppService {
   private sock: any = null;
   private state: WhatsAppState = 'disconnected';
@@ -209,6 +231,8 @@ class WhatsAppService {
         defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 25000,
         retryRequestDelayMs: 300,
+        msgRetryCounterCache: msgRetryCounterCache as any,
+        getMessage: async (key: any) => sentMessageStore.get(key?.id) || undefined,
       });
 
       this.sock.ev.on('creds.update', async () => {
@@ -466,6 +490,8 @@ class WhatsAppService {
       }
 
       const sentMsg = await this.sock.sendMessage(targetJid, { text });
+
+      rememberSentMessage(sentMsg);
       return {
         success: true,
         messageId: sentMsg?.key?.id,
@@ -527,6 +553,8 @@ class WhatsAppService {
       }
 
       const sentMsg = await this.sock.sendMessage(targetJid, payload);
+
+      rememberSentMessage(sentMsg);
       return {
         success: true,
         messageId: sentMsg?.key?.id,
@@ -591,6 +619,8 @@ class WhatsAppService {
       }
 
       const sentMsg = await this.sock.sendMessage(targetJid, payload);
+
+      rememberSentMessage(sentMsg);
       return {
         success: true,
         messageId: sentMsg?.key?.id,
