@@ -326,6 +326,8 @@ class WhatsAppService {
             senderPhone = rawJid.split(':')[0].split('@')[0].replace(/\D/g, '');
           } else {
             const possibleParticipants = [
+              (msg.key as any).senderPn,
+              (msg.key as any).participantPn,
               msg.key.participant,
               (msg.key as any).participantPnJid,
               (msg.key as any).remoteJidPn,
@@ -343,6 +345,24 @@ class WhatsAppService {
                 break;
               }
             }
+          }
+
+          // Fallback: tabela LID -> numero salva pelo login do WhatsApp
+          if (!senderPhone && rawJid.endsWith('@lid')) {
+            try {
+              const lidUser = rawJid.split('@')[0].split(':')[0];
+              const mapFile = path.join(AUTH_DIR, `lid-mapping-${lidUser}_reverse.json`);
+              if (fs.existsSync(mapFile)) {
+                const pn = String(JSON.parse(fs.readFileSync(mapFile, 'utf-8')) || '').replace(/\D/g, '');
+                const ownPn = String(this.sock?.user?.id || '').split(':')[0].split('@')[0].replace(/\D/g, '');
+                if (pn && pn !== ownPn) senderPhone = pn;
+              }
+            } catch { /* ignora e pede o numero */ }
+          }
+          // Nunca usar o proprio numero do bot como telefone do cliente
+          {
+            const ownPn = String(this.sock?.user?.id || '').split(':')[0].split('@')[0].replace(/\D/g, '');
+            if (ownPn && senderPhone === ownPn) senderPhone = '';
           }
 
           // Fallback: If still empty and jid has numbers resembling a phone (10-13 digits)

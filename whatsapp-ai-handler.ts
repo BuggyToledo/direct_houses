@@ -500,7 +500,7 @@ export function buildContactConfirmationPrompt(session: WhatsAppChatSession): st
   const tel = hasPhone ? formatPhoneForDisplay(session.phone) : '';
 
   // Se a sessão for @lid e não tiver telefone real, pedir o número nessa mesma mensagem.
-  if (isLid || !hasPhone) {
+  if (!hasPhone) {
     if (nome && nome !== 'Cliente') {
       return (
         `Confirma seus dados?\n` +
