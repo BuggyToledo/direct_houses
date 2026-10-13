@@ -120,6 +120,7 @@ export interface WhatsAppChatSession {
   lastDispatchedMessageIndex?: number;
   technicalValidationPassed?: boolean;
   technicalValidationErrors?: string[];
+  humanRequested?: boolean;
   /** Early contact confirmation gate (name + phone) before menu/trail */
   awaitingContactConfirmation?: boolean;
   contactConfirmationAsked?: boolean;
@@ -315,13 +316,35 @@ function isPhoneOnlyMessage(text: string): boolean {
 }
 
 /** Affirmative confirmation (SIM / OK / 👍 etc.) for the early contact step. */
-function isContactConfirmationReply(text: string): boolean {
-  const t = (text || '').trim().toLowerCase().replace(/[!.,]/g, '');
+export function isContactConfirmationReply(text: string): boolean {
+  const t = (text || '').trim().toLowerCase().replace(/[!.,?]/g, '');
   if (!t) return false;
-  if (/^(sim|ok|okay|certo|isso|perfeito|pode|pode ser|confirmo|confirmado|correto|exato|beleza|positivo|👍|👍🏻|👍🏼|👍🏽|👍🏾|👍🏿)$/i.test(t)) {
+  if (/^(sim|s|ok|okay|certo|isso|perfeito|pode|pode ser|confirmo|confirmado|correto|exato|beleza|positivo|👍|👍🏻|👍🏼|👍🏽|👍🏾|👍🏿)$/i.test(t)) {
     return true;
   }
   return /\b(sim[,!]?\s*(est[aá]\s*)?(correto|certo|pode)|confirmo|dados?\s*corretos?)\b/i.test(t);
+}
+
+/**
+ * Extracts a typed name from user message.
+ * Handles phrases like "meu nome é Carlos", "me chamo Carlos", or typed full names.
+ * Never treats phone numbers, greetings, or "Sim" as a name.
+ */
+export function extractTypedNameFromText(text: string): string | null {
+  if (!text) return null;
+  const t = text.trim();
+  if (isPhoneOnlyMessage(t) || isGreetingOnly(t) || isContactConfirmationReply(t)) return null;
+  const introMatch = t.match(/(?:meu\s+nome\s+[eé]|me\s+chamo|sou\s+(?:o|a)?|aqui\s+[eé]\s+(?:o|a)?)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'\-\s]+)/i);
+  if (introMatch) {
+    const candidate = introMatch[1].trim().split('\n')[0].replace(/[!.,?]/g, '').trim();
+    if (candidate && candidate.length >= 2 && !isGreetingOnly(candidate)) {
+      return candidate;
+    }
+  }
+  if (looksLikeTypedFullName(t)) {
+    return t.split('\n')[0].replace(/[!.,?]/g, '').trim();
+  }
+  return null;
 }
 
 /**
@@ -364,7 +387,7 @@ function propertyContextDiffers(a?: string, b?: string): boolean {
   return false;
 }
 
-function suggestedDisplayName(session: WhatsAppChatSession): string {
+export function suggestedDisplayName(session: WhatsAppChatSession): string {
   if (session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name)) {
     return session.name;
   }
@@ -372,6 +395,17 @@ function suggestedDisplayName(session: WhatsAppChatSession): string {
     return session.pushName;
   }
   return '';
+}
+
+export function resolveSessionDisplayName(session: WhatsAppChatSession): string {
+  // O nome digitado tem prioridade sobre o pushName
+  if (session.name && session.name !== 'Cliente' && !isGreetingOnly(session.name)) {
+    return session.name;
+  }
+  if (session.pushName && session.pushName !== 'Cliente' && !isGreetingOnly(session.pushName)) {
+    return session.pushName;
+  }
+  return session.name || 'Cliente';
 }
 
 function hasConfirmedContact(session: WhatsAppChatSession): boolean {
@@ -459,30 +493,28 @@ function buildWelcomeMessage(session: WhatsAppChatSession, companyName: string):
   );
 }
 
-function buildContactConfirmationPrompt(session: WhatsAppChatSession): string {
-  const nome = suggestedDisplayName(session) || 'seu nome';
+export function buildContactConfirmationPrompt(session: WhatsAppChatSession): string {
+  const nome = resolveSessionDisplayName(session);
+  const isLid = Boolean(session.jid?.endsWith('@lid'));
   const hasPhone = isValidPhoneNumber(session.phone);
-  const tel = hasPhone ? formatPhoneForDisplay(session.phone) : 'seu WhatsApp';
-  if (!suggestedDisplayName(session) && !hasPhone) {
+  const tel = hasPhone ? formatPhoneForDisplay(session.phone) : '';
+
+  // Se a sessão for @lid e não tiver telefone real, pedir o número nessa mesma mensagem.
+  if (isLid || !hasPhone) {
+    if (nome && nome !== 'Cliente') {
+      return (
+        `Confirma seus dados?\n` +
+        `👤 *Nome:* ${nome}\n\n` +
+        `Por favor, me informe o seu *WhatsApp com DDD* (e responda *SIM* se o nome estiver correto ou corrija se precisar).`
+      );
+    }
     return (
-      `Para seguirmos, me confirma seu *nome completo* e *WhatsApp com DDD*?\n` +
-      `Pode responder com o nome e o número, ou diga *SIM* se os dados estiverem corretos.`
+      `Para seguirmos, por favor me informe o seu *nome completo* e o seu *WhatsApp com DDD*.\n` +
+      `Pode responder com o nome e o número por aqui.`
     );
   }
-  if (!suggestedDisplayName(session)) {
-    return (
-      `Confirma seus dados?\n` +
-      `📱 *Telefone:* ${tel}\n\n` +
-      `Responde *SIM* se o telefone está certo, ou me envia seu *nome completo* (e corrija o telefone se precisar).`
-    );
-  }
-  if (!hasPhone) {
-    return (
-      `Confirma seus dados?\n` +
-      `👤 *Nome:* ${nome}\n\n` +
-      `Responde *SIM* e me informe seu *WhatsApp com DDD*, ou corrija o nome se estiver errado.`
-    );
-  }
+
+  // Telefone real conhecido: mostra nome e session.phone formatado com formatPhoneForDisplay
   return (
     `Confirma seus dados?\n` +
     `👤 *${nome}* · 📱 *${tel}*\n\n` +
@@ -518,15 +550,10 @@ function applyTypedNameFromMessages(session: WhatsAppChatSession, userMessages: 
   let applied = false;
   for (const m of userMessages) {
     const clean = m.content.trim().split('\n')[0].replace(/[!.,?]/g, '').trim();
-    if (!looksLikeTypedFullName(clean)) continue;
-    // Prefer multi-word names when overwriting an existing suggested pushName
-    const words = clean.split(/\s+/).filter(Boolean);
-    const currentIsConfirmed = Boolean(session.extractedLead.nameConfirmed);
-    if (currentIsConfirmed && words.length === 1 && (session.name || '').split(/\s+/).length >= 2) {
-      continue;
-    }
-    session.name = clean;
-    session.extractedLead.nome = clean;
+    const typed = extractTypedNameFromText(clean);
+    if (!typed) continue;
+    session.name = typed;
+    session.extractedLead.nome = typed;
     applied = true;
   }
   return applied;
@@ -548,7 +575,7 @@ function replyAfterContactConfirmed(session: WhatsAppChatSession, companyName: s
  * Handles early name/phone confirmation gate. Returns reply text if this turn
  * should short-circuit before menu/AI trail; otherwise null.
  */
-function processContactConfirmationGate(
+export function processContactConfirmationGate(
   session: WhatsAppChatSession,
   messageText: string,
   companyName: string
@@ -568,14 +595,16 @@ function processContactConfirmationGate(
   // Phone typed in this message
   const detectedPhone = extractPhoneFromText(last);
   if (detectedPhone && isValidPhoneNumber(detectedPhone)) {
-    session.phone = detectedPhone;
-    session.extractedLead.telefone = formatPhoneForDisplay(detectedPhone);
+    session.phone = cleanPhoneNumber(detectedPhone);
+    session.extractedLead.telefone = formatPhoneForDisplay(session.phone);
+    session.extractedLead.phoneConfirmed = true;
   }
 
   // Typed name always preferred over pushName
-  if (looksLikeTypedFullName(last) && !isPhoneOnlyMessage(last)) {
-    session.name = last.trim().split('\n')[0].replace(/[!.,?]/g, '').trim();
-    session.extractedLead.nome = session.name;
+  const typedName = extractTypedNameFromText(last);
+  if (typedName && !isPhoneOnlyMessage(last)) {
+    session.name = typedName;
+    session.extractedLead.nome = typedName;
   }
 
   // Seed display name from pushName for the prompt only (not confirmed)
@@ -585,24 +614,33 @@ function processContactConfirmationGate(
   }
 
   const hasPhone = isValidPhoneNumber(session.phone);
-  const hasNameHint = Boolean(suggestedDisplayName(session));
 
-  // Affirmative confirmation
-  if (isContactConfirmationReply(last) && hasPhone && hasNameHint) {
-    session.extractedLead.nameConfirmed = true;
-    session.extractedLead.phoneConfirmed = true;
-    session.extractedLead.dadosNaoConfirmados = false;
-    session.awaitingContactConfirmation = false;
-    session.contactConfirmationAsked = true;
-    session.extractedLead.estadoAtendimento = 'menu_inicial';
-    if (!session.extractedLead.trilhaNavegacao.includes('Contato confirmado (nome + telefone)')) {
-      session.extractedLead.trilhaNavegacao.push('Contato confirmado (nome + telefone)');
+  // Affirmative confirmation: "SIM" / "sim" etc.
+  if (isContactConfirmationReply(last)) {
+    if (hasPhone) {
+      session.extractedLead.nameConfirmed = true;
+      session.extractedLead.phoneConfirmed = true;
+      session.extractedLead.dadosNaoConfirmados = false;
+      session.awaitingContactConfirmation = false;
+      session.contactConfirmationAsked = true;
+      session.extractedLead.estadoAtendimento = 'menu_inicial';
+      if (!session.extractedLead.trilhaNavegacao.includes('Contato confirmado (nome + telefone)')) {
+        session.extractedLead.trilhaNavegacao.push('Contato confirmado (nome + telefone)');
+      }
+      return replyAfterContactConfirmed(session, companyName);
+    } else {
+      // @lid without real phone: name confirmed, ask for phone directly without repeating the confirmation prompt
+      session.extractedLead.nameConfirmed = true;
+      session.contactConfirmationAsked = true;
+      session.awaitingContactConfirmation = true;
+      return `Perfeito! Para que eu possa te apresentar as opções e te conectar com nossos consultores, por favor me envie o seu *número de WhatsApp com DDD*. 😊`;
     }
-    return replyAfterContactConfirmed(session, companyName);
   }
 
   // User sent a clear full name + we already have phone → treat as correction/confirm
-  if (looksLikeTypedFullName(last) && hasPhone && !isContactConfirmationReply(last) && session.contactConfirmationAsked) {
+  if (typedName && hasPhone && !isContactConfirmationReply(last) && session.contactConfirmationAsked) {
+    session.name = typedName;
+    session.extractedLead.nome = typedName;
     session.extractedLead.nameConfirmed = true;
     session.extractedLead.phoneConfirmed = true;
     session.extractedLead.dadosNaoConfirmados = false;
@@ -614,7 +652,20 @@ function processContactConfirmationGate(
     return replyAfterContactConfirmed(session, companyName);
   }
 
-  // First turn of cycle: welcome + confirmation in one reply
+  // User sent phone number when awaiting contact confirmation -> confirm phone and open menu
+  if (detectedPhone && isValidPhoneNumber(detectedPhone) && session.contactConfirmationAsked) {
+    session.extractedLead.nameConfirmed = true;
+    session.extractedLead.phoneConfirmed = true;
+    session.extractedLead.dadosNaoConfirmados = false;
+    session.awaitingContactConfirmation = false;
+    session.extractedLead.estadoAtendimento = 'menu_inicial';
+    if (!session.extractedLead.trilhaNavegacao.includes('Telefone informado e confirmado pelo cliente')) {
+      session.extractedLead.trilhaNavegacao.push('Telefone informado e confirmado pelo cliente');
+    }
+    return replyAfterContactConfirmed(session, companyName);
+  }
+
+  // First turn of cycle: welcome + confirmation in one reply (NO menu yet!)
   if (!session.contactConfirmationAsked) {
     session.awaitingContactConfirmation = true;
     session.contactConfirmationAsked = true;
@@ -701,9 +752,12 @@ function isLaunchBrowseState(estado?: string): boolean {
 }
 
 /** Dispatch is not allowed on the turn that only opens a menu option or is still collecting. */
-function isPrematureDispatchTurn(session: WhatsAppChatSession, lastUserText: string): boolean {
+export function isPrematureDispatchTurn(session: WhatsAppChatSession, lastUserText: string): boolean {
+  if (session.humanRequested || session.extractedLead?.humanRequested) {
+    return false;
+  }
   const choice = normalizeMenuChoice(lastUserText);
-  const estado = session.extractedLead.estadoAtendimento || '';
+  const estado = session.extractedLead?.estadoAtendimento || '';
   // Submenu 4 becomes the consultor handoff only after the state machine leaves the launch picker.
   if (choice === '4' && (estado === 'aguardando_corretor' || estado === 'atendimento_humano')) {
     return false;
@@ -711,7 +765,7 @@ function isPrematureDispatchTurn(session: WhatsAppChatSession, lastUserText: str
   if (choice === '1' && stateBlocksLoneMenuOne(estado)) return true;
   if (choice === '2' || choice === '3' || choice === '4') return true;
   if (stateBlocksLoneMenuOne(estado)) return true;
-  if (estado === 'respondendo_duvida' && !session.extractedLead.informacoesColetadas?.duvidaTexto) {
+  if (estado === 'respondendo_duvida' && !session.extractedLead?.informacoesColetadas?.duvidaTexto) {
     return true;
   }
   return false;
@@ -815,7 +869,7 @@ function buildLaunchSubmenu(lanc: Lancamento): string {
   );
 }
 
-function selectLaunch(session: WhatsAppChatSession, lanc: Lancamento): void {
+export function selectLaunch(session: WhatsAppChatSession, lanc: Lancamento): void {
   const fromStudio = session.extractedLead.intencaoAtual === 'cta_studio' || session.extractedLead.tipoAtendimento === TIPO_STUDIO;
   session.extractedLead.selectedLancamentoId = lanc.id;
   session.extractedLead.selectedLancamentoNome = lanc.nome;
@@ -827,6 +881,7 @@ function selectLaunch(session: WhatsAppChatSession, lanc: Lancamento): void {
   session.extractedLead.estadoAtendimento = 'lancamento_selecionado';
   session.extractedLead.isComplete = false;
   session.extractedLead.humanRequested = false;
+  session.humanRequested = false;
   session.extractedLead.pendingMedia = undefined;
   const tag = `Empreendimento: ${lanc.nome}`;
   if (!session.extractedLead.trilhaNavegacao.includes(tag)) {
@@ -860,7 +915,7 @@ function buildLaunchDetails(lanc: Lancamento): string {
   );
 }
 
-function handoffToConsultor(session: WhatsAppChatSession, companyName: string, lanc?: Lancamento): string {
+export function handoffToConsultor(session: WhatsAppChatSession, companyName: string, lanc?: Lancamento): string {
   const preserveStudio =
     session.extractedLead.intencaoAtual === 'cta_studio' || session.extractedLead.tipoAtendimento === TIPO_STUDIO;
   session.extractedLead.intencaoAtual = 'aguardar_corretor';
@@ -870,6 +925,7 @@ function handoffToConsultor(session: WhatsAppChatSession, companyName: string, l
   }
   session.extractedLead.isComplete = true;
   session.extractedLead.humanRequested = true;
+  session.humanRequested = true;
   session.extractedLead.pendingMedia = undefined;
   if (!session.extractedLead.trilhaNavegacao.includes('Optou por falar com consultor')) {
     session.extractedLead.trilhaNavegacao.push('Optou por falar com consultor');
@@ -883,9 +939,11 @@ function handoffToConsultor(session: WhatsAppChatSession, companyName: string, l
   );
 }
 
-function applyLaunchSubmenuAction(session: WhatsAppChatSession, lanc: Lancamento, action: LaunchSubmenuAction, companyName: string): string {
+export function applyLaunchSubmenuAction(session: WhatsAppChatSession, lanc: Lancamento, action: LaunchSubmenuAction, companyName: string): string {
   session.extractedLead.estadoAtendimento = 'lancamento_selecionado';
   session.extractedLead.isComplete = false;
+  session.extractedLead.humanRequested = false;
+  session.humanRequested = false;
   session.extractedLead.pendingMedia = undefined;
 
   if (action === 'fotos') {
@@ -930,14 +988,18 @@ function applyLaunchSubmenuAction(session: WhatsAppChatSession, lanc: Lancamento
  * After the catalog list: number/name selects a launch and opens its submenu.
  * Digits 1–4 are submenu actions only once a launch is selected — never the main menu.
  */
-function handleLaunchFollowUp(session: WhatsAppChatSession, lastUserMsg: string, companyName: string): string {
+export function handleLaunchFollowUp(session: WhatsAppChatSession, lastUserMsg: string, companyName: string): string {
   const fromStudio =
     session.extractedLead.intencaoAtual === 'cta_studio' || session.extractedLead.tipoAtendimento === TIPO_STUDIO;
   const listed = fromStudio ? activeStudioLaunches() : listedLaunches();
   const estado = session.extractedLead.estadoAtendimento;
   const selected =
     listed.find((item) => item.id === session.extractedLead.selectedLancamentoId) ||
-    getActiveLancamentos().find((item) => item.id === session.extractedLead.selectedLancamentoId);
+    getActiveLancamentos().find((item) => item.id === session.extractedLead.selectedLancamentoId) ||
+    (session.extractedLead.selectedLancamentoNome
+      ? listed.find((item) => item.nome.toLowerCase() === session.extractedLead.selectedLancamentoNome?.toLowerCase()) ||
+        getActiveLancamentos().find((item) => item.nome.toLowerCase() === session.extractedLead.selectedLancamentoNome?.toLowerCase())
+      : undefined);
 
   if (listed.length === 0) {
     const menuDigit = normalizeMenuChoice(lastUserMsg);
@@ -952,16 +1014,23 @@ function handleLaunchFollowUp(session: WhatsAppChatSession, lastUserMsg: string,
     return fromStudio ? buildStudioListingMessage(companyName) : buildLancamentosListingMessage(companyName);
   }
 
-  if (estado === 'lancamento_selecionado' && selected) {
+  if (estado === 'lancamento_selecionado') {
     const action = parseLaunchSubmenuAction(lastUserMsg);
-    if (action) return applyLaunchSubmenuAction(session, selected, action, companyName);
-    const renamed = matchLaunchByName(lastUserMsg, listed);
-    if (renamed && renamed.id !== selected.id) {
-      const next = listed.find((item) => item.id === renamed.id)!;
-      selectLaunch(session, next);
-      return buildLaunchSubmenu(next);
+    if (action) {
+      if (action === 'consultor') {
+        return handoffToConsultor(session, companyName, selected);
+      }
+      if (selected) return applyLaunchSubmenuAction(session, selected, action, companyName);
     }
-    return buildLaunchSubmenu(selected);
+    if (selected) {
+      const renamed = matchLaunchByName(lastUserMsg, listed);
+      if (renamed && renamed.id !== selected.id) {
+        const next = listed.find((item) => item.id === renamed.id)!;
+        selectLaunch(session, next);
+        return buildLaunchSubmenu(next);
+      }
+      return buildLaunchSubmenu(selected);
+    }
   }
 
   const byNumber = matchLaunchByNumber(lastUserMsg, listed);
@@ -1257,6 +1326,7 @@ function advancePlantaQualification(session: WhatsAppChatSession, text: string, 
   session.extractedLead.estadoAtendimento = 'planta_concluido';
   session.extractedLead.isComplete = true;
   session.extractedLead.humanRequested = true;
+  session.humanRequested = true;
   session.extractedLead.produtoImovel =
     `Compra na planta — orçamento ${info.faixaValor}; prazo ${info.prazo}; financiamento ${info.formaPagamento}; bairro ${info.regiao}`;
   pushTrail(session, TRAIL_PLANTA_PROFILE);
@@ -1728,6 +1798,7 @@ function getFallbackReply(
     session.extractedLead.tipoAtendimento = 'Atendimento Humano';
     session.extractedLead.isComplete = true;
     session.extractedLead.humanRequested = true;
+    session.humanRequested = true;
     return `Claro. Vou encaminhar seu atendimento para um consultor da ${companyName}. Ele continuará o contato com você e terá acesso às informações já registradas.`;
   }
 
@@ -1741,6 +1812,7 @@ function getFallbackReply(
     session.extractedLead.tipoAtendimento = 'Aguardando contato do corretor';
     session.extractedLead.isComplete = true;
     session.extractedLead.humanRequested = true;
+    session.humanRequested = true;
     return (
       `Perfeito, ${session.name}. Seu interesse no imóvel ${codigoImovel !== 'Não informado' ? codigoImovel : 'de interesse'} já foi encaminhado ao consultor responsável.\n\n` +
       `Ele continuará o atendimento e poderá informar os próximos passos. Se precisar de algo, você também pode enviar uma mensagem por aqui.`
@@ -2185,6 +2257,7 @@ async function extractLeadFromSession(session: WhatsAppChatSession) {
     humanRequested,
     finalStructuredText: `NOVO LEAD DIRECT HOUSES\nNome: ${session.name && session.name !== 'Cliente' ? session.name : 'Cliente WhatsApp'}${session.extractedLead.nameConfirmed ? ' (confirmado)' : ' (não confirmado)'}\nTelefone: ${displayPhone}${session.extractedLead.phoneConfirmed ? ' (confirmado)' : ''}\nCódigo do Imóvel: ${session.extractedLead.codigoImovel || 'Não informado'}\nLink do Imóvel: ${session.extractedLead.linkImovel || 'Não informado'}\nIntenção Atual: ${session.extractedLead.intencaoAtual || tipo || 'Aguardando corretor'}\nTipo de Atendimento: ${tipo || 'Aguardando corretor'}\nProduto/Imóvel: ${produto || 'A combinar com corretor'}\nConsentimento para contato: Sim, autorizado conforme LGPD\nOrigem: WhatsApp Web Direct Houses\nStatus: Aguardando contato do corretor`,
   };
+  session.humanRequested = humanRequested;
 
   // Se o lead atingiu critérios de qualificação completa, aciona a bateria de validação técnica com estado 'validating'
   if (isFullyQualified && session.status !== 'dispatched') {
@@ -2275,7 +2348,12 @@ export async function performTechnicalLeadValidation(
     session.technicalValidationPassed = true;
     session.technicalValidationErrors = [];
     session.extractedLead.isComplete = true;
-    session.extractedLead.estadoAtendimento = 'qualificado';
+    if (
+      session.extractedLead.estadoAtendimento !== 'aguardando_corretor' &&
+      session.extractedLead.estadoAtendimento !== 'atendimento_humano'
+    ) {
+      session.extractedLead.estadoAtendimento = 'qualificado';
+    }
     scheduleSessionsPersist();
 
     console.log(
@@ -2866,7 +2944,7 @@ export function getWhatsAppSession(jid: string): WhatsAppChatSession | undefined
  * Prefers confirmed name+phone; otherwise nudges confirmation once, then dispatches
  * a slim dossier marked "dados não confirmados" if contact is still usable.
  */
-async function checkInactiveSessions() {
+export async function checkInactiveSessions() {
   const now = Date.now();
   const companyName = process.env.COMPANY_NAME || 'Direct Houses';
   const roletaConfig = await getRoletaConfig();
@@ -2877,158 +2955,191 @@ async function checkInactiveSessions() {
   const inactivityTimeoutMs = timeoutSec * 1000;
 
   for (const session of sessions.values()) {
-    if (session.status === 'active' && session.messages.length > 0) {
-      const lastActivityTime = new Date(session.lastActivity).getTime();
-      if (now - lastActivityTime >= inactivityTimeoutMs) {
-        await extractLeadFromSession(session);
+    // Nunca envia o mesmo lead duas vezes
+    if (session.status === 'dispatched' || Boolean(session.lastDispatchedAt)) {
+      continue;
+    }
+    if (!session.messages.length && !session.initialMessage) {
+      continue;
+    }
 
-        const hasPhone = isValidPhoneNumber(session.phone);
-        const hasNameHint = Boolean(suggestedDisplayName(session));
-        const confirmed = hasConfirmedContact(session);
+    const isQualifiedOrHuman =
+      session.status === 'qualified' ||
+      Boolean(session.humanRequested) ||
+      Boolean(session.extractedLead?.humanRequested);
 
-        // Prefer usable contact early: nudge confirmation once before dispatching unconfirmed
-        if (hasPhone && !confirmed && !session.contactConfirmationNudgedOnInactivity) {
-          session.contactConfirmationNudgedOnInactivity = true;
-          session.awaitingContactConfirmation = true;
-          session.contactConfirmationAsked = true;
-          session.lastActivity = new Date().toISOString();
-          const nudge =
-            `Antes de te conectar a um consultor, confirma seus dados?\n` +
-            buildContactConfirmationPrompt(session).replace(/^Confirma seus dados\?\n?/, '');
-          try {
-            await whatsAppService.sendTextMessage(session.jid, nudge);
-            session.messages.push({
-              id: `msg-${Date.now()}-inactivity-nudge`,
-              role: 'assistant',
-              content: nudge,
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            });
-            scheduleSessionsPersist();
-          } catch (err) {
-            console.warn('⚠️ [Inatividade] Falha ao enviar nudge de confirmação:', err);
-          }
-          continue;
-        }
+    const lastActivityTime = new Date(session.lastActivity || 0).getTime();
+    const isInactive = now - lastActivityTime >= inactivityTimeoutMs;
 
-        // Dispatch only with phone + (confirmed OR clearly captured name/tipo)
-        const canDispatch =
-          hasPhone &&
-          (confirmed ||
-            hasNameHint ||
-            Boolean(session.extractedLead.tipoAtendimento) ||
-            Boolean(session.extractedLead.produtoImovel) ||
-            Boolean(session.extractedLead.linkImovel));
+    // checkInactiveSessions pega sessões inativas OU sessões com humanRequested/qualified sem lastDispatchedAt
+    if (!isQualifiedOrHuman && !isInactive) {
+      continue;
+    }
 
-        if (!canDispatch) {
-          continue;
-        }
+    await extractLeadFromSession(session);
 
-        if (!confirmed) {
-          session.extractedLead.dadosNaoConfirmados = true;
-          // Seed name from pushName hint for dossier if still Cliente
-          if ((!session.name || session.name === 'Cliente') && session.pushName) {
-            session.name = session.pushName;
-            session.extractedLead.nome = session.pushName;
-          }
-        }
+    const hasPhone = isValidPhoneNumber(session.phone);
+    if (!hasPhone) {
+      continue;
+    }
 
-        console.log(
-          `⏱️ [Inatividade] Sessão de ${session.name} (${session.phone}) inativa há mais de ${timeoutSec}s. Despachando na Roleta...`
-        );
+    const confirmed = hasConfirmedContact(session);
 
-        const chosenBroker = await getNextBrokerInRoleta();
-
-        if (chosenBroker) {
-          const alteredHistory = getAlteredSessionHistory(session).slice(-4);
-          const brokerMsg = formatBrokerLeadMessage(
-            {
-              nome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
-              telefone: session.extractedLead.telefone || session.phone,
-              tipoAtendimento: session.extractedLead.tipoAtendimento || 'Interesse Comercial Inicial',
-              produtoImovel: session.extractedLead.produtoImovel || 'A combinar com corretor',
-              observacoes: confirmed
-                ? 'Inatividade após confirmação de contato.'
-                : 'Dados não confirmados — lead recuperado por inatividade.',
-              isTimeoutRecovery: true,
-              initialMessage: session.initialMessage || session.messages[0]?.content || '',
-              historicoMensagens: alteredHistory,
-              nameConfirmed: session.extractedLead.nameConfirmed,
-              phoneConfirmed: session.extractedLead.phoneConfirmed,
-              dadosNaoConfirmados: session.extractedLead.dadosNaoConfirmados,
-              linkImovel: session.extractedLead.linkImovel,
-              codigoImovel: session.extractedLead.codigoImovel,
-            },
-            companyName,
-            session.phone
-          );
-
-          await whatsAppService.sendTextMessage(chosenBroker.phone, brokerMsg);
-
-          session.status = 'dispatched';
-          session.lastDispatchedAt = new Date().toISOString();
-          session.lastDispatchedMessageIndex = session.messages.length - 1;
-          session.assignedBroker = {
-            id: chosenBroker.id,
-            name: chosenBroker.name,
-            phone: chosenBroker.phone,
-            assignedAt: new Date().toISOString(),
-          };
-          scheduleSessionsPersist();
-
-          const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
-
-          await recordDistributionLog({
-            leadId,
-            leadNome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
-            leadTelefone: session.extractedLead.telefone || session.phone,
-            brokerId: chosenBroker.id,
-            brokerNome: chosenBroker.name,
-            brokerTelefone: chosenBroker.phone,
-            tipoDistribuicao: 'timeout_recuperacao',
-            statusEnvioWhatsApp: 'enviado',
-            motivo: confirmed
-              ? 'Recuperação por inatividade (contato confirmado)'
-              : 'Recuperação por inatividade (dados não confirmados)',
-            produtoImovel: session.extractedLead.produtoImovel || 'A combinar com corretor',
-          });
-
-          await recordLead({
-            id: leadId,
-            nome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
-            telefone: session.extractedLead.telefone || session.phone,
-            tipoAtendimento: session.extractedLead.tipoAtendimento || 'Interesse Comercial Inicial',
-            produtoImovel: session.extractedLead.produtoImovel || 'A combinar com corretor',
-            observacoes: confirmed
-              ? 'Cliente parou de responder após confirmação. Lead recuperado na roleta.'
-              : 'Dados não confirmados. Cliente parou de responder. Lead recuperado na roleta.',
-            initialMessage: session.initialMessage || session.messages[0]?.content || '',
-            origem: 'WhatsApp Web Direct Houses',
-            status: 'em_atendimento',
-            temperatura: 'quente',
-            assignedBroker: session.assignedBroker,
-            historicoMensagens: alteredHistory,
-            historicoDistribuicoes: [
-              {
-                id: `dist-${Date.now()}`,
-                brokerId: chosenBroker.id,
-                brokerName: chosenBroker.name,
-                brokerPhone: chosenBroker.phone,
-                data: new Date().toISOString(),
-                tipo: 'timeout_recuperacao',
-                statusEnvioWhatsApp: 'enviado',
-              },
-            ],
-          });
-
-          console.log(`✅ [Inatividade] Lead recuperado e enviado com sucesso para ${chosenBroker.name} (${chosenBroker.phone})`);
-        }
+    // Se a sessão está ativa e não foi confirmada nem qualificada, envia um nudge antes de despachar dados não confirmados
+    if (!isQualifiedOrHuman && !confirmed && !session.contactConfirmationNudgedOnInactivity) {
+      session.contactConfirmationNudgedOnInactivity = true;
+      session.awaitingContactConfirmation = true;
+      session.contactConfirmationAsked = true;
+      session.lastActivity = new Date().toISOString();
+      const nudge =
+        `Antes de te conectar a um consultor, confirma seus dados?\n` +
+        buildContactConfirmationPrompt(session).replace(/^Confirma seus dados\?\n?/, '');
+      try {
+        await whatsAppService.sendTextMessage(session.jid, nudge);
+        session.messages.push({
+          id: `msg-${Date.now()}-inactivity-nudge`,
+          role: 'assistant',
+          content: nudge,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        });
+        scheduleSessionsPersist();
+      } catch (err) {
+        console.warn('⚠️ [Inatividade] Falha ao enviar nudge de confirmação:', err);
       }
+      continue;
+    }
+
+    const canDispatch =
+      hasPhone &&
+      (isQualifiedOrHuman ||
+        confirmed ||
+        Boolean(suggestedDisplayName(session)) ||
+        Boolean(session.extractedLead.tipoAtendimento) ||
+        Boolean(session.extractedLead.produtoImovel) ||
+        Boolean(session.extractedLead.linkImovel));
+
+    if (!canDispatch) {
+      continue;
+    }
+
+    if (!confirmed && !isQualifiedOrHuman) {
+      session.extractedLead.dadosNaoConfirmados = true;
+      if ((!session.name || session.name === 'Cliente') && session.pushName) {
+        session.name = session.pushName;
+        session.extractedLead.nome = session.pushName;
+      }
+    }
+
+    // Cancel pending timer if any to avoid double dispatch
+    if (activeDispatchTimers.has(session.jid)) {
+      clearTimeout(activeDispatchTimers.get(session.jid)!);
+      activeDispatchTimers.delete(session.jid);
+    }
+
+    console.log(
+      `⏱️ [Roleta/Inatividade] Despachando sessão de ${session.name} (${session.phone}) (status: ${session.status}, humanRequested: ${Boolean(session.humanRequested || session.extractedLead?.humanRequested)})...`
+    );
+
+    const chosenBroker = await getNextBrokerInRoleta();
+
+    if (chosenBroker) {
+      const alteredHistory = getAlteredSessionHistory(session).slice(-4);
+      const brokerMsg = formatBrokerLeadMessage(
+        {
+          nome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
+          telefone: session.extractedLead.telefone || session.phone,
+          tipoAtendimento: session.extractedLead.tipoAtendimento || 'Interesse Comercial Inicial',
+          produtoImovel: session.extractedLead.produtoImovel || 'A combinar com corretor',
+          observacoes: confirmed
+            ? 'Contato confirmado pelo cliente.'
+            : isQualifiedOrHuman
+            ? 'Lead qualificado / transferência solicitada.'
+            : 'Dados não confirmados — lead recuperado por inatividade.',
+          isTimeoutRecovery: !isQualifiedOrHuman,
+          initialMessage: session.initialMessage || session.messages[0]?.content || '',
+          historicoMensagens: alteredHistory,
+          nameConfirmed: session.extractedLead.nameConfirmed,
+          phoneConfirmed: session.extractedLead.phoneConfirmed,
+          dadosNaoConfirmados: session.extractedLead.dadosNaoConfirmados,
+          linkImovel: session.extractedLead.linkImovel,
+          codigoImovel: session.extractedLead.codigoImovel,
+        },
+        companyName,
+        session.phone
+      );
+
+      await whatsAppService.sendTextMessage(chosenBroker.phone, brokerMsg);
+
+      session.status = 'dispatched';
+      session.lastDispatchedAt = new Date().toISOString();
+      session.lastDispatchedMessageIndex = session.messages.length - 1;
+      session.assignedBroker = {
+        id: chosenBroker.id,
+        name: chosenBroker.name,
+        phone: chosenBroker.phone,
+        assignedAt: new Date().toISOString(),
+      };
+      scheduleSessionsPersist();
+
+      const leadId = `lead-${session.jid.replace(/[^a-zA-Z0-9]/g, '')}`;
+
+      await recordDistributionLog({
+        leadId,
+        leadNome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
+        leadTelefone: session.extractedLead.telefone || session.phone,
+        brokerId: chosenBroker.id,
+        brokerNome: chosenBroker.name,
+        brokerTelefone: chosenBroker.phone,
+        tipoDistribuicao: isQualifiedOrHuman ? 'automatica_roleta' : 'timeout_recuperacao',
+        statusEnvioWhatsApp: 'enviado',
+        motivo: isQualifiedOrHuman
+          ? 'Qualificação / Atendimento humano confirmado'
+          : confirmed
+          ? 'Recuperação por inatividade (contato confirmado)'
+          : 'Recuperação por inatividade (dados não confirmados)',
+        produtoImovel: session.extractedLead.produtoImovel || 'A combinar com corretor',
+      });
+
+      await recordLead({
+        id: leadId,
+        nome: session.extractedLead.nome || session.name || 'Cliente WhatsApp',
+        telefone: session.extractedLead.telefone || session.phone,
+        tipoAtendimento: session.extractedLead.tipoAtendimento || 'Interesse Comercial Inicial',
+        produtoImovel: session.extractedLead.produtoImovel || 'A combinar com corretor',
+        observacoes: confirmed
+          ? 'Contato confirmado pelo cliente.'
+          : isQualifiedOrHuman
+          ? 'Lead qualificado na roleta.'
+          : 'Dados não confirmados. Lead recuperado na roleta por inatividade.',
+        initialMessage: session.initialMessage || session.messages[0]?.content || '',
+        origem: 'WhatsApp Web Direct Houses',
+        status: 'em_atendimento',
+        temperatura: 'quente',
+        assignedBroker: session.assignedBroker,
+        historicoMensagens: alteredHistory,
+        historicoDistribuicoes: [
+          {
+            id: `dist-${Date.now()}`,
+            brokerId: chosenBroker.id,
+            brokerName: chosenBroker.name,
+            brokerPhone: chosenBroker.phone,
+            data: new Date().toISOString(),
+            tipo: isQualifiedOrHuman ? 'automatica_roleta' : 'timeout_recuperacao',
+            statusEnvioWhatsApp: 'enviado',
+          },
+        ],
+      });
+
+      console.log(`✅ [Roleta] Lead despachado com sucesso para ${chosenBroker.name} (${chosenBroker.phone})`);
     }
   }
 }
 
 // Check every 30 seconds
-setInterval(checkInactiveSessions, 30000);
+const inactivityInterval = setInterval(checkInactiveSessions, 30000);
+if (inactivityInterval?.unref) {
+  inactivityInterval.unref();
+}
 
 process.on('beforeExit', () => {
   persistSessionsToDiskNow();
