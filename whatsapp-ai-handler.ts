@@ -505,7 +505,7 @@ export function buildContactConfirmationPrompt(session: WhatsAppChatSession): st
       return (
         `Confirma seus dados?\n` +
         `👤 *Nome:* ${nome}\n\n` +
-        `Por favor, me informe o seu *WhatsApp com DDD* (e responda *SIM* se o nome estiver correto ou corrija se precisar).`
+        `Por segurança, o WhatsApp não mostra seu número pra gente. Pode me informar seu *WhatsApp com DDD*? É por ele que um consultor vai falar com você. Se o nome estiver certo, é só responder com o número; se não, corrija aqui também.`
       );
     }
     return (
