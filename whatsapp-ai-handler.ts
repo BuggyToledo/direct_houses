@@ -2970,6 +2970,10 @@ export async function checkInactiveSessions() {
 
     const lastActivityTime = new Date(session.lastActivity || 0).getTime();
     const isInactive = now - lastActivityTime >= inactivityTimeoutMs;
+    // Não ressuscitar conversas antigas (mais de 24h paradas) depois de reinício
+    if (now - lastActivityTime > 24 * 60 * 60 * 1000) {
+      continue;
+    }
 
     // checkInactiveSessions pega sessões inativas OU sessões com humanRequested/qualified sem lastDispatchedAt
     if (!isQualifiedOrHuman && !isInactive) {
@@ -2978,10 +2982,8 @@ export async function checkInactiveSessions() {
 
     await extractLeadFromSession(session);
 
+    // Sem telefone também segue: o corretor responde pelo WhatsApp da empresa
     const hasPhone = isValidPhoneNumber(session.phone);
-    if (!hasPhone) {
-      continue;
-    }
 
     const confirmed = hasConfirmedContact(session);
 
@@ -3009,18 +3011,15 @@ export async function checkInactiveSessions() {
       continue;
     }
 
-    const canDispatch =
-      hasPhone &&
-      (isQualifiedOrHuman ||
-        confirmed ||
-        Boolean(suggestedDisplayName(session)) ||
-        Boolean(session.extractedLead.tipoAtendimento) ||
-        Boolean(session.extractedLead.produtoImovel) ||
-        Boolean(session.extractedLead.linkImovel));
-
-    if (!canDispatch) {
-      continue;
-    }
+    // Depois do lembrete, todo contato vai pro corretor (inclusive quem só disse "oi")
+    const onlySaidHi =
+      !session.extractedLead.tipoAtendimento &&
+      !session.extractedLead.produtoImovel &&
+      !session.extractedLead.linkImovel &&
+      !isQualifiedOrHuman;
+    const extraNotes =
+      (onlySaidHi ? ' Cliente só mandou "oi" e não respondeu mais.' : '') +
+      (!hasPhone ? ' Número não informado (oculto pelo WhatsApp) — responder pelo WhatsApp da empresa.' : '');
 
     if (!confirmed && !isQualifiedOrHuman) {
       session.extractedLead.dadosNaoConfirmados = true;
@@ -3050,11 +3049,11 @@ export async function checkInactiveSessions() {
           telefone: session.extractedLead.telefone || session.phone,
           tipoAtendimento: session.extractedLead.tipoAtendimento || 'Interesse Comercial Inicial',
           produtoImovel: session.extractedLead.produtoImovel || 'A combinar com corretor',
-          observacoes: confirmed
+          observacoes: (confirmed
             ? 'Contato confirmado pelo cliente.'
             : isQualifiedOrHuman
             ? 'Lead qualificado / transferência solicitada.'
-            : 'Dados não confirmados — lead recuperado por inatividade.',
+            : 'Dados não confirmados — lead recuperado por inatividade.') + extraNotes,
           isTimeoutRecovery: !isQualifiedOrHuman,
           initialMessage: session.initialMessage || session.messages[0]?.content || '',
           historicoMensagens: alteredHistory,
@@ -3106,11 +3105,11 @@ export async function checkInactiveSessions() {
         telefone: session.extractedLead.telefone || session.phone,
         tipoAtendimento: session.extractedLead.tipoAtendimento || 'Interesse Comercial Inicial',
         produtoImovel: session.extractedLead.produtoImovel || 'A combinar com corretor',
-        observacoes: confirmed
+        observacoes: (confirmed
           ? 'Contato confirmado pelo cliente.'
           : isQualifiedOrHuman
           ? 'Lead qualificado na roleta.'
-          : 'Dados não confirmados. Lead recuperado na roleta por inatividade.',
+          : 'Dados não confirmados. Lead recuperado na roleta por inatividade.') + extraNotes,
         initialMessage: session.initialMessage || session.messages[0]?.content || '',
         origem: 'WhatsApp Web Direct Houses',
         status: 'em_atendimento',
